@@ -439,6 +439,19 @@ async function runScan() {
     const data = await resp.json();
     if (data.error) throw new Error(data.error);
 
+    if (data.market_closed) {
+      renderTracker(data.tracker_stats);
+      dot.className = 'status-dot idle';
+      statusText.textContent = 'Markets closed';
+      recsArea.innerHTML = `
+        <div class="no-trade">
+          <div class="icon">—</div>
+          <h2>Markets are closed</h2>
+          <p>${data.market_closed} Historical tracker stats are shown above.</p>
+        </div>`;
+      return;
+    }
+
     renderTracker(data.tracker_stats);
     renderMacro(data.macro_summary);
     renderRecommendations(data.instruments);
@@ -544,7 +557,10 @@ function fmtTime(iso) {
   if (!iso) return '';
   try {
     const d = new Date(iso);
-    return d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+    return d.toLocaleTimeString('en-US', {
+      hour: '2-digit', minute: '2-digit',
+      timeZone: 'America/New_York'
+    }) + ' ET';
   } catch { return iso; }
 }
 

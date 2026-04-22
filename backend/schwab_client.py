@@ -10,7 +10,7 @@ Schwab docs: https://developer.schwab.com/products/trader-api--individual
 import base64
 import json
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import quote, urlencode
 
@@ -40,7 +40,7 @@ class SchwabClient:
         return {}
 
     def _save_tokens(self, tokens):
-        tokens["saved_at"] = datetime.utcnow().isoformat()
+        tokens["saved_at"] = datetime.now(timezone.utc).isoformat()
         with open(self.token_path, "w") as f:
             json.dump(tokens, f, indent=2)
         self.tokens = tokens
@@ -78,7 +78,8 @@ class SchwabClient:
                 "grant_type": "authorization_code",
                 "code": code,
                 "redirect_uri": self.callback_url
-            }
+            },
+            timeout=15
         )
         resp.raise_for_status()
         self._save_tokens(resp.json())
@@ -99,7 +100,8 @@ class SchwabClient:
             data={
                 "grant_type": "refresh_token",
                 "refresh_token": self.tokens["refresh_token"]
-            }
+            },
+            timeout=15
         )
         resp.raise_for_status()
         # Schwab keeps the same refresh token in most refresh cycles, but merge to be safe
@@ -113,7 +115,9 @@ class SchwabClient:
         expires_in = self.tokens.get("expires_in", 1800)
         if saved_at:
             saved_dt = datetime.fromisoformat(saved_at)
-            age = (datetime.utcnow() - saved_dt).total_seconds()
+            if saved_dt.tzinfo is None:
+                saved_dt = saved_dt.replace(tzinfo=timezone.utc)
+            age = (datetime.now(timezone.utc) - saved_dt).total_seconds()
             if age >= expires_in - 60:  # refresh 60s before expiry
                 self._refresh_access_token()
         elif self.tokens.get("access_token"):
@@ -130,7 +134,8 @@ class SchwabClient:
     def get_quote(self, symbol):
         resp = requests.get(
             f"{self.MARKET_DATA_URL}/{symbol}/quotes",
-            headers=self._headers()
+            headers=self._headers(),
+            timeout=10
         )
         resp.raise_for_status()
         data = resp.json().get(symbol, {})
@@ -157,7 +162,8 @@ class SchwabClient:
         resp = requests.get(
             f"{self.MARKET_DATA_URL}/pricehistory",
             headers=self._headers(),
-            params=params
+            params=params,
+            timeout=10
         )
         resp.raise_for_status()
         return resp.json().get("candles", [])
@@ -181,7 +187,8 @@ class SchwabClient:
         resp = requests.get(
             f"{self.MARKET_DATA_URL}/chains",
             headers=self._headers(),
-            params=params
+            params=params,
+            timeout=10
         )
         resp.raise_for_status()
         data = resp.json()

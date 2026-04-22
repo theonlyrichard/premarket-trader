@@ -82,6 +82,16 @@ def scan():
     try:
         # 1. Pull macro calendar for today
         today = datetime.now(timezone.utc).date()
+
+        if today.weekday() >= 5:
+            return jsonify({
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "market_closed": "Markets are closed on weekends.",
+                "macro_summary": {"high_impact_events": [], "all_events": [], "earnings_today": []},
+                "instruments": [],
+                "tracker_stats": tracker.get_rolling_stats(days=30)
+            })
+
         macro_events = finnhub.economic_calendar(today, today)
         earnings = finnhub.earnings_calendar(
             today, today,
@@ -122,12 +132,15 @@ def scan():
         # 3. Rank setups and pick top 1-2
         ranked = rank_setups(results)
 
-        # 4. Silently log recommendations to the tracker
+        # 4. Resolve outcomes of any open past recommendations before recording new ones
+        tracker.check_outcomes(schwab)
+
+        # 5. Silently log recommendations to the tracker
         for r in ranked:
             if r.get("setup"):
                 tracker.record_recommendation(r)
 
-        # 5. Get tracker stats for display
+        # 6. Get tracker stats for display
         stats = tracker.get_rolling_stats(days=30)
 
         return jsonify({
@@ -158,9 +171,16 @@ def auth_callback():
 
 @app.route("/api/health", methods=["GET"])
 def health():
+    finnhub_ok = False
+    try:
+        today = datetime.now(timezone.utc).date()
+        finnhub.economic_calendar(today, today)
+        finnhub_ok = True
+    except Exception:
+        pass
     return jsonify({
         "schwab_authed": schwab.is_authenticated(),
-        "finnhub_key_set": bool(config["finnhub"]["api_key"]),
+        "finnhub_key_valid": finnhub_ok,
         "tracker_db": str(DB_PATH)
     })
 

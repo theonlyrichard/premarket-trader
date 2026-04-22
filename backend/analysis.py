@@ -167,16 +167,31 @@ def compute_vwap(bars):
 
 def prior_week_levels(daily_bars):
     """Return prior week's high, low, close."""
-    if len(daily_bars) < 10:
+    if len(daily_bars) < 6:
         return None
-    # Last 5 complete days = current week so far; prior 5 = last week
-    prior_week = daily_bars[-10:-5]
-    if not prior_week:
+
+    last_ms = daily_bars[-1].get("datetime", 0)
+    if last_ms:
+        last_date = datetime.fromtimestamp(last_ms / 1000, tz=timezone.utc).date()
+    else:
+        last_date = datetime.now(timezone.utc).date()
+
+    days_since_monday = last_date.weekday()
+    this_week_monday = last_date - timedelta(days=days_since_monday)
+
+    prior_bars = [
+        b for b in daily_bars
+        if b.get("datetime") and
+        datetime.fromtimestamp(b["datetime"] / 1000, tz=timezone.utc).date() < this_week_monday
+    ]
+    if not prior_bars:
         return None
+
+    prior_bars = prior_bars[-5:]
     return {
-        "high": max(b["high"] for b in prior_week),
-        "low": min(b["low"] for b in prior_week),
-        "close": prior_week[-1]["close"]
+        "high": max(b["high"] for b in prior_bars),
+        "low": min(b["low"] for b in prior_bars),
+        "close": prior_bars[-1]["close"]
     }
 
 
