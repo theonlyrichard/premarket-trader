@@ -1,0 +1,669 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Pre-Market Research Desk</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Fraunces:ital,opsz,wght@0,9..144,300;0,9..144,500;0,9..144,700;1,9..144,400&display=swap');
+
+  :root {
+    --bg: #0a0d12;
+    --bg-elevated: #12161d;
+    --bg-card: #161b24;
+    --border: #242b38;
+    --border-bright: #3a4555;
+    --ink: #e8ecf1;
+    --ink-dim: #8a95a8;
+    --ink-faint: #5a6578;
+    --accent: #c9a961;
+    --accent-dim: #8a7542;
+    --green: #4ade80;
+    --red: #f87171;
+    --amber: #fbbf24;
+    --blue: #60a5fa;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 13px;
+    line-height: 1.55;
+    min-height: 100vh;
+    background-image:
+      radial-gradient(circle at 20% 10%, rgba(201, 169, 97, 0.04) 0%, transparent 40%),
+      radial-gradient(circle at 80% 60%, rgba(96, 165, 250, 0.03) 0%, transparent 40%);
+  }
+
+  .container { max-width: 1280px; margin: 0 auto; padding: 48px 32px 80px; }
+
+  header {
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 24px;
+    margin-bottom: 32px;
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-end;
+    flex-wrap: wrap;
+    gap: 20px;
+  }
+  h1 {
+    font-family: 'Fraunces', serif;
+    font-weight: 300;
+    font-size: 42px;
+    letter-spacing: -0.02em;
+  }
+  h1 em { font-style: italic; color: var(--accent); font-weight: 500; }
+  .subtitle { font-size: 11px; text-transform: uppercase; letter-spacing: 0.2em; color: var(--ink-faint); margin-top: 10px; }
+
+  .meta { text-align: right; font-size: 11px; color: var(--ink-dim); }
+  .meta .date { font-family: 'Fraunces', serif; font-size: 18px; color: var(--ink); }
+  .meta .status-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
+  .status-dot.live { background: var(--green); box-shadow: 0 0 8px var(--green); }
+  .status-dot.error { background: var(--red); }
+  .status-dot.idle { background: var(--ink-faint); }
+
+  /* Scan button */
+  .scan-bar {
+    display: flex;
+    gap: 12px;
+    align-items: center;
+    margin-bottom: 32px;
+    flex-wrap: wrap;
+  }
+  button {
+    background: transparent;
+    border: 1px solid var(--border-bright);
+    color: var(--ink);
+    padding: 12px 24px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.2em;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  button:hover { border-color: var(--accent); color: var(--accent); }
+  button.primary { background: var(--accent); color: var(--bg); border-color: var(--accent); font-weight: 700; }
+  button.primary:hover { background: transparent; color: var(--accent); }
+  button:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  .last-scan { font-size: 11px; color: var(--ink-faint); }
+
+  /* Tracker stats bar */
+  .tracker {
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    padding: 16px 20px;
+    margin-bottom: 32px;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 24px;
+    font-size: 11px;
+  }
+  .tracker-item .label {
+    text-transform: uppercase;
+    letter-spacing: 0.15em;
+    color: var(--ink-faint);
+    font-size: 10px;
+    margin-bottom: 4px;
+  }
+  .tracker-item .value {
+    font-family: 'Fraunces', serif;
+    font-size: 20px;
+    font-weight: 400;
+    color: var(--ink);
+  }
+  .tracker-item .detail { color: var(--ink-dim); margin-top: 2px; }
+
+  /* Macro banner */
+  .macro-banner {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    padding: 20px 24px;
+    margin-bottom: 24px;
+  }
+  .macro-banner h3 {
+    font-family: 'Fraunces', serif;
+    font-weight: 400;
+    font-size: 14px;
+    color: var(--ink-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.2em;
+    margin-bottom: 12px;
+  }
+  .macro-events { display: flex; gap: 16px; flex-wrap: wrap; }
+  .macro-event {
+    font-size: 12px;
+    padding: 6px 12px;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-left: 2px solid var(--amber);
+  }
+  .macro-event.high { border-left-color: var(--red); }
+  .macro-event .time { color: var(--accent); margin-right: 8px; font-weight: 500; }
+  .macro-event .name { color: var(--ink); }
+  .no-events { color: var(--ink-faint); font-style: italic; font-size: 12px; }
+
+  /* Recommendation cards */
+  .recs-header {
+    font-family: 'Fraunces', serif;
+    font-weight: 400;
+    font-size: 24px;
+    margin-bottom: 16px;
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+  }
+  .recs-header .count { font-size: 11px; color: var(--ink-faint); text-transform: uppercase; letter-spacing: 0.15em; }
+
+  .rec-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    margin-bottom: 20px;
+    overflow: hidden;
+  }
+  .rec-card.high { border-color: var(--green); }
+  .rec-card.medium { border-color: var(--accent); }
+  .rec-card.low { border-color: var(--border-bright); opacity: 0.8; }
+
+  .rec-head {
+    padding: 24px 28px 20px;
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    gap: 24px;
+    align-items: center;
+    border-bottom: 1px solid var(--border);
+  }
+  .rec-symbol {
+    font-family: 'Fraunces', serif;
+    font-size: 48px;
+    font-weight: 500;
+    letter-spacing: -0.02em;
+    color: var(--ink);
+  }
+  .rec-summary .direction {
+    display: inline-block;
+    padding: 3px 10px;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.15em;
+    margin-bottom: 6px;
+  }
+  .rec-summary .direction.CALL { background: rgba(74, 222, 128, 0.15); color: var(--green); border: 1px solid var(--green); }
+  .rec-summary .direction.PUT { background: rgba(248, 113, 113, 0.15); color: var(--red); border: 1px solid var(--red); }
+  .rec-summary .headline {
+    font-family: 'Fraunces', serif;
+    font-size: 18px;
+    color: var(--ink);
+    font-style: italic;
+    margin-top: 4px;
+  }
+  .rec-summary .subline { font-size: 11px; color: var(--ink-dim); margin-top: 4px; }
+
+  .rec-conviction { text-align: right; }
+  .rec-conviction .label {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.2em;
+    color: var(--ink-faint);
+    margin-bottom: 4px;
+  }
+  .rec-conviction .value {
+    font-family: 'Fraunces', serif;
+    font-size: 32px;
+    font-weight: 500;
+    letter-spacing: -0.02em;
+  }
+  .rec-conviction .value.High { color: var(--green); }
+  .rec-conviction .value.Medium { color: var(--accent); }
+  .rec-conviction .value.Low { color: var(--ink-dim); }
+  .rec-conviction .score { font-size: 11px; color: var(--ink-faint); margin-top: 2px; }
+
+  .rec-body {
+    display: grid;
+    grid-template-columns: 1.2fr 1fr;
+    gap: 0;
+  }
+  @media (max-width: 720px) { .rec-body { grid-template-columns: 1fr; } }
+
+  .rec-levels { padding: 24px 28px; border-right: 1px solid var(--border); }
+  .rec-levels h4 {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.2em;
+    color: var(--ink-faint);
+    margin-bottom: 14px;
+    font-weight: 500;
+  }
+  .level-row {
+    display: grid;
+    grid-template-columns: 120px 1fr;
+    padding: 8px 0;
+    border-bottom: 1px dashed var(--border);
+    font-size: 13px;
+  }
+  .level-row:last-child { border-bottom: none; }
+  .level-row .k {
+    color: var(--ink-faint);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    align-self: center;
+  }
+  .level-row .v {
+    color: var(--ink);
+    font-variant-numeric: tabular-nums;
+    font-weight: 500;
+  }
+  .level-row .v.target { color: var(--green); }
+  .level-row .v.stop { color: var(--red); }
+  .level-row .v.accent { color: var(--accent); }
+
+  .rec-factors { padding: 24px 28px; }
+  .rec-factors h4 {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.2em;
+    color: var(--ink-faint);
+    margin-bottom: 14px;
+    font-weight: 500;
+  }
+  .factor-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 8px 0;
+    border-bottom: 1px dashed var(--border);
+    font-size: 12px;
+  }
+  .factor-row:last-child { border-bottom: none; }
+  .factor-row .fk { color: var(--ink-dim); text-transform: uppercase; font-size: 10px; letter-spacing: 0.1em; }
+  .factor-row .fv { color: var(--ink); font-size: 12px; text-align: right; }
+  .factor-row .fv.pos { color: var(--green); }
+  .factor-row .fv.neg { color: var(--red); }
+  .factor-row .fv.warn { color: var(--amber); }
+
+  .option-strike {
+    margin-top: 16px;
+    padding-top: 16px;
+    border-top: 1px solid var(--border);
+    font-size: 12px;
+  }
+  .option-strike .strike-label { color: var(--ink-faint); text-transform: uppercase; font-size: 10px; letter-spacing: 0.15em; margin-bottom: 6px; }
+  .option-strike .strike-main { font-family: 'Fraunces', serif; font-size: 18px; color: var(--accent); }
+  .option-strike .strike-greek { color: var(--ink-dim); margin-top: 4px; font-size: 11px; }
+
+  /* No-trade state */
+  .no-trade {
+    text-align: center;
+    padding: 64px 40px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+  }
+  .no-trade .icon {
+    font-family: 'Fraunces', serif;
+    font-size: 64px;
+    font-weight: 300;
+    color: var(--ink-faint);
+    margin-bottom: 12px;
+  }
+  .no-trade h2 {
+    font-family: 'Fraunces', serif;
+    font-weight: 400;
+    font-size: 24px;
+    margin-bottom: 8px;
+  }
+  .no-trade p { color: var(--ink-dim); max-width: 500px; margin: 0 auto; line-height: 1.7; }
+
+  /* Loading state */
+  .loading {
+    text-align: center;
+    padding: 80px 40px;
+    color: var(--ink-dim);
+  }
+  .loading-bar {
+    width: 200px;
+    height: 2px;
+    background: var(--border);
+    margin: 24px auto 0;
+    overflow: hidden;
+    position: relative;
+  }
+  .loading-bar::after {
+    content: '';
+    position: absolute;
+    left: -40%;
+    width: 40%;
+    height: 100%;
+    background: var(--accent);
+    animation: slide 1.2s ease-in-out infinite;
+  }
+  @keyframes slide { to { left: 100%; } }
+
+  /* Error state */
+  .error-box {
+    background: rgba(248, 113, 113, 0.08);
+    border: 1px solid var(--red);
+    border-left: 3px solid var(--red);
+    padding: 16px 20px;
+    margin-bottom: 24px;
+    font-size: 12px;
+    color: var(--ink);
+  }
+  .error-box strong { color: var(--red); }
+
+  /* Footer */
+  footer {
+    margin-top: 60px;
+    padding-top: 24px;
+    border-top: 1px solid var(--border);
+    font-size: 10px;
+    color: var(--ink-faint);
+    text-align: center;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+  }
+
+  @media (max-width: 600px) {
+    .container { padding: 24px 16px 60px; }
+    h1 { font-size: 28px; }
+    .rec-head { grid-template-columns: 1fr; gap: 12px; }
+    .rec-symbol { font-size: 36px; }
+  }
+</style>
+</head>
+<body>
+<div class="container">
+
+  <header>
+    <div>
+      <h1>Pre-Market <em>Research</em> Desk</h1>
+      <div class="subtitle">SPY · QQQ · Supply & Demand + Volume Confirmation</div>
+    </div>
+    <div class="meta">
+      <div class="date" id="todayDate"></div>
+      <div style="margin-top: 6px;">
+        <span class="status-dot idle" id="statusDot"></span>
+        <span id="statusText">Ready to scan</span>
+      </div>
+    </div>
+  </header>
+
+  <div class="scan-bar">
+    <button class="primary" onclick="runScan()" id="scanBtn">Run Morning Scan</button>
+    <span class="last-scan" id="lastScan"></span>
+  </div>
+
+  <div id="trackerBar"></div>
+  <div id="errorBox"></div>
+  <div id="macroBanner"></div>
+  <div id="recsArea">
+    <div class="loading" style="display:none;" id="loadingBox">
+      Scanning SPY and QQQ…
+      <div class="loading-bar"></div>
+    </div>
+  </div>
+
+  <footer>Not financial advice · Local dashboard · v0.2</footer>
+</div>
+
+<script>
+document.getElementById('todayDate').textContent = new Date().toLocaleDateString('en-US', {
+  weekday: 'long', month: 'long', day: 'numeric', year: 'numeric'
+});
+
+let lastScanTime = null;
+
+async function runScan() {
+  const btn = document.getElementById('scanBtn');
+  const loading = document.getElementById('loadingBox');
+  const recsArea = document.getElementById('recsArea');
+  const errBox = document.getElementById('errorBox');
+  const dot = document.getElementById('statusDot');
+  const statusText = document.getElementById('statusText');
+
+  btn.disabled = true;
+  errBox.innerHTML = '';
+  recsArea.innerHTML = '';
+  loading.style.display = 'block';
+  recsArea.appendChild(loading);
+  dot.className = 'status-dot idle';
+  statusText.textContent = 'Scanning…';
+
+  try {
+    const resp = await fetch('/api/scan');
+    const data = await resp.json();
+    if (data.error) throw new Error(data.error);
+
+    renderTracker(data.tracker_stats);
+    renderMacro(data.macro_summary);
+    renderRecommendations(data.instruments);
+
+    dot.className = 'status-dot live';
+    lastScanTime = new Date();
+    statusText.textContent = 'Scan complete';
+    document.getElementById('lastScan').textContent =
+      `Last scan: ${lastScanTime.toLocaleTimeString()}`;
+  } catch (e) {
+    dot.className = 'status-dot error';
+    statusText.textContent = 'Scan failed';
+    errBox.innerHTML = `<div class="error-box"><strong>Error:</strong> ${e.message}<br>
+      Check that the backend is running and API credentials are configured (see SETUP.md).</div>`;
+    recsArea.innerHTML = '';
+  } finally {
+    btn.disabled = false;
+    loading.style.display = 'none';
+  }
+}
+
+function renderTracker(stats) {
+  const area = document.getElementById('trackerBar');
+  if (!stats || stats.total === 0) {
+    area.innerHTML = `<div class="tracker">
+      <div class="tracker-item">
+        <div class="label">Outcome Tracking</div>
+        <div class="value" style="font-size:14px;color:var(--ink-dim);">Collecting data…</div>
+        <div class="detail">Results will appear after ~10 recommendations have resolved.</div>
+      </div>
+    </div>`;
+    return;
+  }
+  const wr = stats.win_rate != null ? `${stats.win_rate}%` : '—';
+  const hConv = stats.by_conviction.High;
+  const mConv = stats.by_conviction.Medium;
+  area.innerHTML = `
+    <div class="tracker">
+      <div class="tracker-item">
+        <div class="label">Last ${stats.days} days</div>
+        <div class="value">${stats.total} recs</div>
+        <div class="detail">${stats.wins}W / ${stats.losses}L / ${stats.open} open</div>
+      </div>
+      <div class="tracker-item">
+        <div class="label">Overall win rate</div>
+        <div class="value">${wr}</div>
+        <div class="detail">Closed trades only</div>
+      </div>
+      <div class="tracker-item">
+        <div class="label">High conviction</div>
+        <div class="value">${hConv.win_rate != null ? hConv.win_rate + '%' : '—'}</div>
+        <div class="detail">${hConv.total} closed</div>
+      </div>
+      <div class="tracker-item">
+        <div class="label">Medium conviction</div>
+        <div class="value">${mConv.win_rate != null ? mConv.win_rate + '%' : '—'}</div>
+        <div class="detail">${mConv.total} closed</div>
+      </div>
+    </div>
+  `;
+}
+
+function renderMacro(macro) {
+  const area = document.getElementById('macroBanner');
+  if (!macro) { area.innerHTML = ''; return; }
+  const events = macro.high_impact_events || [];
+  const earnings = macro.earnings_today || [];
+  const all = macro.all_events || [];
+
+  const eventPills = events.slice(0, 6).map(e => `
+    <div class="macro-event high">
+      <span class="time">${fmtTime(e.time)}</span>
+      <span class="name">${e.event || '—'}</span>
+    </div>
+  `).join('');
+
+  const earningsPills = earnings.map(e => `
+    <div class="macro-event">
+      <span class="time">${e.hour || ''}</span>
+      <span class="name">${e.symbol} earnings</span>
+    </div>
+  `).join('');
+
+  const mediumEvents = all.filter(e => e.impact === 'medium').slice(0, 4).map(e => `
+    <div class="macro-event">
+      <span class="time">${fmtTime(e.time)}</span>
+      <span class="name">${e.event || '—'}</span>
+    </div>
+  `).join('');
+
+  const hasAny = eventPills || earningsPills || mediumEvents;
+  area.innerHTML = `
+    <div class="macro-banner">
+      <h3>Macro Calendar · Today</h3>
+      <div class="macro-events">
+        ${hasAny ? (eventPills + earningsPills + mediumEvents) : '<div class="no-events">No high-impact events scheduled.</div>'}
+      </div>
+    </div>
+  `;
+}
+
+function fmtTime(iso) {
+  if (!iso) return '';
+  try {
+    const d = new Date(iso);
+    return d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+  } catch { return iso; }
+}
+
+function renderRecommendations(instruments) {
+  const area = document.getElementById('recsArea');
+  const viable = (instruments || []).filter(i => i.setup);
+
+  if (viable.length === 0) {
+    area.innerHTML = `
+      <div class="recs-header">Today's Setups <span class="count">None qualify</span></div>
+      <div class="no-trade">
+        <div class="icon">∅</div>
+        <h2>No trade today</h2>
+        <p>Neither SPY nor QQQ has a setup that meets the minimum R:R and factor threshold this morning. The discipline is the edge. Check back tomorrow.</p>
+      </div>
+    `;
+    return;
+  }
+
+  // Take top 2 at most
+  const top = viable.slice(0, 2);
+  area.innerHTML = `
+    <div class="recs-header">
+      Today's Setups
+      <span class="count">${top.length} recommendation${top.length > 1 ? 's' : ''}</span>
+    </div>
+    ${top.map(renderRecCard).join('')}
+  `;
+}
+
+function renderRecCard(instrument) {
+  const s = instrument.setup;
+  const conviction = (s.conviction_label || 'Low').toLowerCase();
+  const zoneRange = `${s.zone_bottom.toFixed(2)} – ${s.zone_top.toFixed(2)}`;
+  const confluenceStr = (s.confluence_factors || []).length
+    ? s.confluence_factors.map(f => f.replace(/_/g, ' ')).join(', ')
+    : 'none';
+
+  const strike = s.strike_recommendation;
+  const strikeBlock = strike ? `
+    <div class="option-strike">
+      <div class="strike-label">Suggested contract</div>
+      <div class="strike-main">${strike.symbol || `${s.instrument} ${strike.strike} ${s.direction[0]}`} · exp ${strike.expiration || s.target_expiry}</div>
+      <div class="strike-greek">
+        Δ ${strike.delta?.toFixed(2) ?? '—'}
+        · Θ ${strike.theta?.toFixed(2) ?? '—'}
+        · IV ${strike.iv ? (strike.iv * 100).toFixed(1) + '%' : '—'}
+        · bid/ask ${strike.bid ?? '—'}/${strike.ask ?? '—'}
+      </div>
+    </div>
+  ` : `
+    <div class="option-strike">
+      <div class="strike-label">Suggested contract</div>
+      <div class="strike-greek">Fetch option chain to populate strike (requires Schwab auth).</div>
+    </div>
+  `;
+
+  const breakdown = s.conviction_breakdown || {};
+  const breakdownRows = Object.entries(breakdown).map(([k, v]) => {
+    const isPos = v.includes('+1') || v.includes('+2');
+    const isNeg = v.includes('−') || v.includes('-3');
+    const cls = isPos ? 'pos' : (isNeg ? 'neg' : '');
+    return `
+      <div class="factor-row">
+        <span class="fk">${k.replace(/_/g, ' ')}</span>
+        <span class="fv ${cls}">${v}</span>
+      </div>
+    `;
+  }).join('');
+
+  const macroFlag = s.macro?.hostile
+    ? `<div class="factor-row"><span class="fk">Macro risk</span><span class="fv neg">Event during hold window</span></div>`
+    : `<div class="factor-row"><span class="fk">Macro risk</span><span class="fv pos">Clear</span></div>`;
+
+  return `
+    <div class="rec-card ${conviction}">
+      <div class="rec-head">
+        <div class="rec-symbol">${s.instrument}</div>
+        <div class="rec-summary">
+          <div class="direction ${s.direction}">${s.direction}</div>
+          <div class="headline">${buildHeadline(s)}</div>
+          <div class="subline">
+            Current ${s.current_price.toFixed(2)} · Zone ${zoneRange} · R:R 1:${s.rr_ratio}
+          </div>
+        </div>
+        <div class="rec-conviction">
+          <div class="label">Conviction</div>
+          <div class="value ${s.conviction_label}">${s.conviction_label}</div>
+          <div class="score">Score ${s.conviction_score}/10</div>
+        </div>
+      </div>
+      <div class="rec-body">
+        <div class="rec-levels">
+          <h4>Trade Framework</h4>
+          <div class="level-row"><span class="k">Entry trigger</span><span class="v accent">${s.entry_trigger}</span></div>
+          <div class="level-row"><span class="k">Stop loss</span><span class="v stop">${s.stop}</span></div>
+          <div class="level-row"><span class="k">Target</span><span class="v target">${s.target}</span></div>
+          <div class="level-row"><span class="k">Risk</span><span class="v">${s.risk_points} pts</span></div>
+          <div class="level-row"><span class="k">Reward</span><span class="v">${s.reward_points} pts</span></div>
+          <div class="level-row"><span class="k">Confluence</span><span class="v">${confluenceStr}</span></div>
+          ${strikeBlock}
+        </div>
+        <div class="rec-factors">
+          <h4>Factor Breakdown</h4>
+          ${breakdownRows}
+          ${macroFlag}
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function buildHeadline(setup) {
+  const zoneType = setup.direction === 'CALL' ? 'demand' : 'supply';
+  const fresh = setup.zone_fresh ? 'Fresh' : 'Tested';
+  const vol = setup.volume_origin_ratio >= 1.8 ? 'high-volume' :
+              setup.volume_origin_ratio >= 1.3 ? 'moderate-volume' : 'low-volume';
+  return `${fresh} ${vol} ${zoneType} zone reaction.`;
+}
+</script>
+</body>
+</html>

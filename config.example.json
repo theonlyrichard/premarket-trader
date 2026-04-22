@@ -1,0 +1,10 @@
+{
+  "schwab": {
+    "app_key": "YOUR_SCHWAB_APP_KEY_HERE",
+    "app_secret": "YOUR_SCHWAB_APP_SECRET_HERE",
+    "callback_url": "https://127.0.0.1"
+  },
+  "finnhub": {
+    "api_key": "YOUR_FINNHUB_API_KEY_HERE"
+  }
+}
