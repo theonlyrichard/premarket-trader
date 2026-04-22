@@ -118,11 +118,23 @@ def scan():
 
             # Only fetch options chain if analysis found a viable setup
             if analysis["setup"]:
+                target = analysis["setup"]["target_expiry"]
                 chain = schwab.get_option_chain(
                     symbol=symbol,
                     contract_type=analysis["setup"]["direction"],
-                    target_date=analysis["setup"]["target_expiry"]
+                    from_date=target,
+                    to_date=target
                 )
+                # Fallback: target expiry may be a market holiday — broaden to next 7 days
+                if not chain.get("contracts"):
+                    today_str = today.isoformat()
+                    end_str = (today + timedelta(days=7)).isoformat()
+                    chain = schwab.get_option_chain(
+                        symbol=symbol,
+                        contract_type=analysis["setup"]["direction"],
+                        from_date=today_str,
+                        to_date=end_str
+                    )
                 analysis["setup"]["strike_recommendation"] = pick_strike(
                     chain, analysis["setup"]
                 )
@@ -167,6 +179,24 @@ def auth_callback():
     data = request.get_json()
     schwab.exchange_code(data["callback_url"])
     return jsonify({"status": "ok"})
+
+
+@app.route("/api/history", methods=["GET"])
+def history():
+    """Return recent recommendations for the history view."""
+    limit = min(int(request.args.get("limit", 30)), 100)
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    rows = conn.execute("""
+        SELECT id, recorded_at, symbol, direction, current_price,
+               entry_trigger_price, stop, target, rr_ratio,
+               conviction_score, conviction_label, outcome, outcome_at
+        FROM recommendations
+        ORDER BY recorded_at DESC
+        LIMIT ?
+    """, (limit,)).fetchall()
+    conn.close()
+    return jsonify([dict(r) for r in rows])
 
 
 @app.route("/api/health", methods=["GET"])

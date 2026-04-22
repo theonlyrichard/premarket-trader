@@ -168,11 +168,11 @@ class SchwabClient:
         resp.raise_for_status()
         return resp.json().get("candles", [])
 
-    def get_option_chain(self, symbol, contract_type="CALL", target_date=None):
+    def get_option_chain(self, symbol, contract_type="CALL", from_date=None, to_date=None):
         """
         Get options chain for a symbol.
         contract_type: CALL or PUT
-        target_date: "YYYY-MM-DD" for specific expiration
+        from_date / to_date: "YYYY-MM-DD" expiration range (both required for exact-date lookup)
         """
         params = {
             "symbol": symbol,
@@ -180,9 +180,10 @@ class SchwabClient:
             "includeUnderlyingQuote": "true",
             "strategy": "SINGLE"
         }
-        if target_date:
-            params["fromDate"] = target_date
-            params["toDate"] = target_date
+        if from_date:
+            params["fromDate"] = from_date
+        if to_date:
+            params["toDate"] = to_date
 
         resp = requests.get(
             f"{self.MARKET_DATA_URL}/chains",

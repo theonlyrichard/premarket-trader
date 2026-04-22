@@ -356,6 +356,48 @@
   }
   .error-box strong { color: var(--red); }
 
+  /* History section */
+  .history-section { margin-top: 48px; }
+  .history-header {
+    font-family: 'Fraunces', serif;
+    font-weight: 400;
+    font-size: 24px;
+    margin-bottom: 16px;
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+  }
+  .history-header .count { font-size: 11px; color: var(--ink-faint); text-transform: uppercase; letter-spacing: 0.15em; }
+  .history-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+  }
+  .history-table th {
+    text-align: left;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border);
+    color: var(--ink-faint);
+    text-transform: uppercase;
+    letter-spacing: 0.15em;
+    font-size: 10px;
+    font-weight: 500;
+    white-space: nowrap;
+  }
+  .history-table td {
+    padding: 10px 14px;
+    border-bottom: 1px dashed var(--border);
+    font-variant-numeric: tabular-nums;
+  }
+  .history-table tr:last-child td { border-bottom: none; }
+  .history-table tr:hover td { background: var(--bg-elevated); }
+  .outcome-WIN { color: var(--green); font-weight: 700; }
+  .outcome-LOSS { color: var(--red); font-weight: 700; }
+  .outcome-OPEN { color: var(--amber); }
+  .outcome-EXPIRED { color: var(--ink-faint); }
+
   /* Footer */
   footer {
     margin-top: 60px;
@@ -395,6 +437,7 @@
 
   <div class="scan-bar">
     <button class="primary" onclick="runScan()" id="scanBtn">Run Morning Scan</button>
+    <button onclick="toggleHistory()" id="historyBtn">View History</button>
     <span class="last-scan" id="lastScan"></span>
   </div>
 
@@ -406,6 +449,14 @@
       Scanning SPY and QQQ…
       <div class="loading-bar"></div>
     </div>
+  </div>
+
+  <div id="historySection" class="history-section" style="display:none">
+    <div class="history-header">
+      Trade History
+      <span class="count" id="historyCount"></span>
+    </div>
+    <div id="historyTable"></div>
   </div>
 
   <footer>Not financial advice · Local dashboard · v0.2</footer>
@@ -503,12 +554,12 @@ function renderTracker(stats) {
       <div class="tracker-item">
         <div class="label">High conviction</div>
         <div class="value">${hConv.win_rate != null ? hConv.win_rate + '%' : '—'}</div>
-        <div class="detail">${hConv.total} closed</div>
+        <div class="detail">${hConv.w}W / ${hConv.l}L · ${hConv.total} closed</div>
       </div>
       <div class="tracker-item">
         <div class="label">Medium conviction</div>
         <div class="value">${mConv.win_rate != null ? mConv.win_rate + '%' : '—'}</div>
-        <div class="detail">${mConv.total} closed</div>
+        <div class="detail">${mConv.w}W / ${mConv.l}L · ${mConv.total} closed</div>
       </div>
     </div>
   `;
@@ -671,6 +722,68 @@ function renderRecCard(instrument) {
       </div>
     </div>
   `;
+}
+
+let historyLoaded = false;
+
+function toggleHistory() {
+  const section = document.getElementById('historySection');
+  const btn = document.getElementById('historyBtn');
+  if (!historyLoaded) {
+    loadHistory();
+    historyLoaded = true;
+  } else if (section.style.display === 'none') {
+    section.style.display = 'block';
+    btn.textContent = 'Hide History';
+  } else {
+    section.style.display = 'none';
+    btn.textContent = 'View History';
+  }
+}
+
+async function loadHistory() {
+  const section = document.getElementById('historySection');
+  const tableDiv = document.getElementById('historyTable');
+  const btn = document.getElementById('historyBtn');
+  section.style.display = 'block';
+  btn.textContent = 'Hide History';
+  tableDiv.innerHTML = '<div style="color:var(--ink-dim);padding:20px 0">Loading…</div>';
+  try {
+    const resp = await fetch('/api/history?limit=30');
+    const rows = await resp.json();
+    document.getElementById('historyCount').textContent = `${rows.length} trades`;
+    if (rows.length === 0) {
+      tableDiv.innerHTML = '<div style="color:var(--ink-dim);padding:20px 0">No recommendations recorded yet.</div>';
+      return;
+    }
+    tableDiv.innerHTML = `
+      <table class="history-table">
+        <thead>
+          <tr>
+            <th>Date</th><th>Symbol</th><th>Dir</th><th>Conviction</th>
+            <th>Entry</th><th>Stop</th><th>Target</th><th>R:R</th><th>Outcome</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${rows.map(r => `
+            <tr>
+              <td>${r.recorded_at.split('T')[0]}</td>
+              <td>${r.symbol}</td>
+              <td class="direction ${r.direction}" style="font-size:11px;font-weight:700">${r.direction}</td>
+              <td>${r.conviction_label || '—'}</td>
+              <td>${r.entry_trigger_price != null ? r.entry_trigger_price.toFixed(2) : '—'}</td>
+              <td style="color:var(--red)">${r.stop != null ? r.stop.toFixed(2) : '—'}</td>
+              <td style="color:var(--green)">${r.target != null ? r.target.toFixed(2) : '—'}</td>
+              <td>1:${r.rr_ratio != null ? r.rr_ratio.toFixed(1) : '—'}</td>
+              <td class="outcome-${(r.outcome || 'open').toUpperCase()}">${(r.outcome || 'open').toUpperCase()}</td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    `;
+  } catch (e) {
+    tableDiv.innerHTML = `<div class="error-box">Failed to load history: ${e.message}</div>`;
+  }
 }
 
 function buildHeadline(setup) {
