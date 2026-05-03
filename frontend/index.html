@@ -468,10 +468,10 @@ document.getElementById('todayDate').textContent = new Date().toLocaleDateString
 });
 
 let lastScanTime = null;
+const loading = document.getElementById('loadingBox');
 
 async function runScan() {
   const btn = document.getElementById('scanBtn');
-  const loading = document.getElementById('loadingBox');
   const recsArea = document.getElementById('recsArea');
   const errBox = document.getElementById('errorBox');
   const dot = document.getElementById('statusDot');
