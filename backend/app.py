@@ -115,42 +115,61 @@ def scan():
                 macro_events=macro_events,
                 earnings_events=earnings
             )
-
-            # Only fetch options chain if analysis found a viable setup
-            if analysis["setup"]:
-                target = analysis["setup"]["target_expiry"]
-                chain = schwab.get_option_chain(
-                    symbol=symbol,
-                    contract_type=analysis["setup"]["direction"],
-                    from_date=target,
-                    to_date=target
-                )
-                # Fallback: target expiry may be a market holiday — broaden to next 7 days
-                if not chain.get("contracts"):
-                    today_str = today.isoformat()
-                    end_str = (today + timedelta(days=7)).isoformat()
-                    chain = schwab.get_option_chain(
-                        symbol=symbol,
-                        contract_type=analysis["setup"]["direction"],
-                        from_date=today_str,
-                        to_date=end_str
-                    )
-                analysis["setup"]["strike_recommendation"] = pick_strike(
-                    chain, analysis["setup"]
-                )
-
             results.append(analysis)
 
-        # 3. Rank setups and pick top 1-2
+        # 3. Collect all candidates from all instruments, sort by conviction
+        all_candidates = []
+        for analysis in results:
+            all_candidates.extend(analysis.get("all_candidates", []))
+        all_candidates.sort(key=lambda s: s["conviction_score"], reverse=True)
+
+        # Mix styles: prefer at least 1 scalp and 1 swing if both exist, up to 4 total
+        scalps = [s for s in all_candidates if s.get("trade_style") == "scalp"]
+        swings = [s for s in all_candidates if s.get("trade_style") == "swing"]
+        seen_ids = set()
+        top_setups = []
+        if scalps:
+            top_setups.append(scalps[0])
+            seen_ids.add(id(scalps[0]))
+        if swings:
+            top_setups.append(swings[0])
+            seen_ids.add(id(swings[0]))
+        for s in all_candidates:
+            if len(top_setups) >= 4:
+                break
+            if id(s) not in seen_ids:
+                top_setups.append(s)
+                seen_ids.add(id(s))
+
+        # Fetch options chains only for setups we'll display
+        for setup in top_setups:
+            target = setup["target_expiry"]
+            chain = schwab.get_option_chain(
+                symbol=setup["instrument"],
+                contract_type=setup["direction"],
+                from_date=target,
+                to_date=target
+            )
+            if not chain.get("contracts"):
+                today_str = today.isoformat()
+                end_str = (today + timedelta(days=7)).isoformat()
+                chain = schwab.get_option_chain(
+                    symbol=setup["instrument"],
+                    contract_type=setup["direction"],
+                    from_date=today_str,
+                    to_date=end_str
+                )
+            setup["strike_recommendation"] = pick_strike(chain, setup)
+
+        # Keep ranked instruments for backward compat
         ranked = rank_setups(results)
 
         # 4. Resolve outcomes of any open past recommendations before recording new ones
         tracker.check_outcomes(schwab)
 
-        # 5. Silently log recommendations to the tracker
-        for r in ranked:
-            if r.get("setup"):
-                tracker.record_recommendation(r)
+        # 5. Silently log all displayed setups to the tracker
+        for setup in top_setups:
+            tracker.record_recommendation({"setup": setup})
 
         # 6. Get tracker stats for display
         stats = tracker.get_rolling_stats(days=30)
@@ -158,6 +177,7 @@ def scan():
         return jsonify({
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "macro_summary": summarize_macro(macro_events, earnings),
+            "setups": top_setups,
             "instruments": ranked,
             "tracker_stats": stats
         })

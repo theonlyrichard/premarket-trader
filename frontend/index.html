@@ -195,6 +195,9 @@
   }
   .rec-summary .direction.CALL { background: rgba(74, 222, 128, 0.15); color: var(--green); border: 1px solid var(--green); }
   .rec-summary .direction.PUT { background: rgba(248, 113, 113, 0.15); color: var(--red); border: 1px solid var(--red); }
+  .style-badge { display: inline-block; padding: 3px 10px; font-size: 10px; font-weight: 700; letter-spacing: 0.15em; border: 1px solid; }
+  .style-badge.scalp { color: var(--blue); border-color: var(--blue); background: rgba(96, 165, 250, 0.1); }
+  .style-badge.swing { color: var(--amber); border-color: var(--amber); background: rgba(251, 191, 36, 0.1); }
   .rec-summary .headline {
     font-family: 'Fraunces', serif;
     font-size: 18px;
@@ -505,7 +508,7 @@ async function runScan() {
 
     renderTracker(data.tracker_stats);
     renderMacro(data.macro_summary);
-    renderRecommendations(data.instruments);
+    renderRecommendations(data.setups || []);
 
     dot.className = 'status-dot live';
     lastScanTime = new Date();
@@ -615,9 +618,9 @@ function fmtTime(iso) {
   } catch { return iso; }
 }
 
-function renderRecommendations(instruments) {
+function renderRecommendations(setups) {
   const area = document.getElementById('recsArea');
-  const viable = (instruments || []).filter(i => i.setup);
+  const viable = (setups || []).filter(s => s && s.conviction_score !== undefined);
 
   if (viable.length === 0) {
     area.innerHTML = `
@@ -631,8 +634,7 @@ function renderRecommendations(instruments) {
     return;
   }
 
-  // Take top 2 at most
-  const top = viable.slice(0, 2);
+  const top = viable.slice(0, 4);
   area.innerHTML = `
     <div class="recs-header">
       Today's Setups
@@ -642,13 +644,14 @@ function renderRecommendations(instruments) {
   `;
 }
 
-function renderRecCard(instrument) {
-  const s = instrument.setup;
+function renderRecCard(s) {
   const conviction = (s.conviction_label || 'Low').toLowerCase();
   const zoneRange = `${s.zone_bottom.toFixed(2)} – ${s.zone_top.toFixed(2)}`;
   const confluenceStr = (s.confluence_factors || []).length
     ? s.confluence_factors.map(f => f.replace(/_/g, ' ')).join(', ')
     : 'none';
+  const styleLabel = s.trade_style === 'scalp' ? 'SCALP' : 'SWING';
+  const styleCls = s.trade_style === 'scalp' ? 'scalp' : 'swing';
 
   const strike = s.strike_recommendation;
   const strikeBlock = strike ? `
@@ -672,7 +675,7 @@ function renderRecCard(instrument) {
   const breakdown = s.conviction_breakdown || {};
   const breakdownRows = Object.entries(breakdown).map(([k, v]) => {
     const isPos = v.includes('+1') || v.includes('+2');
-    const isNeg = v.includes('−') || v.includes('-3');
+    const isNeg = v.includes('−');
     const cls = isPos ? 'pos' : (isNeg ? 'neg' : '');
     return `
       <div class="factor-row">
@@ -683,7 +686,7 @@ function renderRecCard(instrument) {
   }).join('');
 
   const macroFlag = s.macro?.hostile
-    ? `<div class="factor-row"><span class="fk">Macro risk</span><span class="fv neg">Event during hold window</span></div>`
+    ? `<div class="factor-row"><span class="fk">Macro risk</span><span class="fv warn">Event during hold window</span></div>`
     : `<div class="factor-row"><span class="fk">Macro risk</span><span class="fv pos">Clear</span></div>`;
 
   return `
@@ -691,7 +694,10 @@ function renderRecCard(instrument) {
       <div class="rec-head">
         <div class="rec-symbol">${s.instrument}</div>
         <div class="rec-summary">
-          <div class="direction ${s.direction}">${s.direction}</div>
+          <div style="display:flex;gap:8px;align-items:center;margin-bottom:6px">
+            <div class="direction ${s.direction}">${s.direction}</div>
+            <div class="style-badge ${styleCls}">${styleLabel}</div>
+          </div>
           <div class="headline">${buildHeadline(s)}</div>
           <div class="subline">
             Current ${s.current_price.toFixed(2)} · Zone ${zoneRange} · R:R 1:${s.rr_ratio}

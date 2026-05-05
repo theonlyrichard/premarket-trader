@@ -50,8 +50,8 @@ def detect_zones(intraday_bars, lookback_bars=100):
         curr_range = curr["high"] - curr["low"]
         curr_body = abs(curr["close"] - curr["open"])
 
-        # Explosive candle: range > 1.5x average AND body > 60% of range
-        is_explosive = curr_range > avg_range * 1.5 and curr_body > curr_range * 0.6
+        # Explosive candle: range > 1.2x average AND body > 50% of range
+        is_explosive = curr_range > avg_range * 1.2 and curr_body > curr_range * 0.5
 
         if is_explosive:
             # Look back 1-3 bars for a base (narrow range consolidation)
@@ -303,20 +303,25 @@ def build_setup(symbol, zone, current_price, confluence_factors, volume_info,
     zone_mid = (zone["top"] + zone["bottom"]) / 2
     zone_height = zone["top"] - zone["bottom"]
 
+    # Scalp: zone mid is within 0.3% of current price (immediately actionable)
+    # Swing: zone requires a larger move (standard hold, bigger target)
+    distance_pct = abs(current_price - zone_mid) / current_price if current_price else 1
+    trade_style = "scalp" if distance_pct <= 0.003 else "swing"
+    target_multiplier = 1.5 if trade_style == "scalp" else 2.5
+
     if zone["type"] == "demand":
         direction = "CALL"
         # Entry: break above zone top after price taps zone
         entry_trigger = f"1m close above {zone['top']:.2f} after tag of zone"
         stop = zone["bottom"] - zone_height * 0.3
-        # Target: next supply zone or prior swing high
         pw = prior_week_levels(daily_bars)
-        target = pw["high"] if pw else current_price + (current_price - stop) * 2.5
+        target = pw["high"] if pw else current_price + (current_price - stop) * target_multiplier
     else:
         direction = "PUT"
         entry_trigger = f"1m close below {zone['bottom']:.2f} after tag of zone"
         stop = zone["top"] + zone_height * 0.3
         pw = prior_week_levels(daily_bars)
-        target = pw["low"] if pw else current_price - (stop - current_price) * 2.5
+        target = pw["low"] if pw else current_price - (stop - current_price) * target_multiplier
 
     risk = abs(current_price - stop)
     reward = abs(target - current_price)
@@ -347,6 +352,7 @@ def build_setup(symbol, zone, current_price, confluence_factors, volume_info,
         "confluence_factors": confluence_factors,
         "zone_fresh": zone["fresh"],
         "zone_strength": round(zone["strength"], 2),
+        "trade_style": trade_style,
         "volume_origin_ratio": volume_info.get("zone_volumes", {}).get(
             id(zone), {}).get("origin_volume_ratio", 0)
     }
@@ -412,10 +418,10 @@ def score_conviction(setup, macro_info, volume_info):
     else:
         breakdown["rr"] = f"R:R 1:{setup['rr_ratio']} (+0)"
 
-    # Macro penalty (-3 if hostile, 0 if neutral)
+    # Macro penalty (-1 if hostile, 0 if neutral)
     if macro_info["hostile"]:
-        score -= 3
-        breakdown["macro"] = "Hostile macro / event risk in hold (−3)"
+        score -= 1
+        breakdown["macro"] = "Event risk in hold period (−1)"
     else:
         breakdown["macro"] = "No major macro risk in hold period"
 
