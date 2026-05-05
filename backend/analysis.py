@@ -359,6 +359,131 @@ def build_setup(symbol, zone, current_price, confluence_factors, volume_info,
 
 
 # ===================================================================
+# CLOSEST MISS SCORING
+# ===================================================================
+
+def compute_closest_miss(symbol, zones, candidates, nearest_demand, nearest_supply,
+                          current_price, volume_info, daily_bars):
+    """
+    Compute how close the best available zone was to qualifying as a setup.
+    Returns a dict with readiness_pct, passed factors, and failed factors with gaps.
+    Returns None if no zones were detected at all.
+    """
+    ZONE_DETECTED = 15
+    ZONE_FRESH    = 20
+    RR_PASS       = 25
+    ZONE_STRENGTH = 20
+    VOLUME_CONF   = 20
+
+    score = 0
+    passed = []
+    failed = []
+
+    if candidates:
+        # A candidate passed R:R — score it directly from its stored data
+        best = max(candidates, key=lambda s: s["conviction_score"])
+
+        score += ZONE_DETECTED
+
+        if best["zone_fresh"]:
+            score += ZONE_FRESH
+            passed.append("Fresh zone")
+        else:
+            failed.append({"factor": "Zone freshness", "have": "tested",
+                           "need": "fresh", "gap": "zone has been revisited"})
+
+        score += RR_PASS
+        passed.append(f"R:R {best['rr_ratio']}x ✓")
+
+        if best["zone_strength"] >= 1.5:
+            score += ZONE_STRENGTH
+            passed.append(f"Zone strength {best['zone_strength']}x")
+        else:
+            failed.append({"factor": "Zone strength", "have": best["zone_strength"],
+                           "need": 1.5, "gap": "candle not explosive enough"})
+
+        vol = best["volume_origin_ratio"]
+        if vol >= 1.3:
+            score += VOLUME_CONF
+            passed.append(f"Volume confirmed ({vol:.1f}x)")
+        else:
+            failed.append({"factor": "Volume at origin", "have": round(vol, 2),
+                           "need": 1.3, "gap": "low volume at zone formation"})
+
+        return {
+            "symbol": symbol,
+            "zone_top": best["zone_top"],
+            "zone_bottom": best["zone_bottom"],
+            "direction": best["direction"],
+            "readiness_pct": min(score, 100),
+            "passed": passed,
+            "failed": failed,
+        }
+
+    # No candidates — evaluate the nearest fresh zone directly
+    best_zone = nearest_demand or nearest_supply
+    if not best_zone:
+        return None
+
+    direction = "CALL" if best_zone["type"] == "demand" else "PUT"
+    score += ZONE_DETECTED
+
+    if best_zone["fresh"]:
+        score += ZONE_FRESH
+        passed.append("Fresh zone")
+    else:
+        failed.append({"factor": "Zone freshness", "have": "tested",
+                       "need": "fresh", "gap": "zone has been revisited"})
+
+    # Approximate R:R for this zone
+    zh = best_zone["top"] - best_zone["bottom"]
+    pw = prior_week_levels(daily_bars)
+    if direction == "CALL":
+        stop = best_zone["bottom"] - zh * 0.3
+        target = pw["high"] if pw else current_price + (current_price - stop) * 2.5
+    else:
+        stop = best_zone["top"] + zh * 0.3
+        target = pw["low"] if pw else current_price - (stop - current_price) * 2.5
+    risk = abs(current_price - stop)
+    reward = abs(target - current_price)
+    actual_rr = round(reward / risk, 2) if risk > 0 else 0
+
+    if actual_rr >= 1.5:
+        score += RR_PASS
+        passed.append(f"R:R {actual_rr}x")
+    else:
+        failed.append({"factor": "R:R", "have": actual_rr, "need": 1.5,
+                       "gap": f"needs {round(max(0, 1.5 - actual_rr), 2)} more"})
+
+    strength = best_zone["strength"]
+    if strength >= 1.5:
+        score += ZONE_STRENGTH
+        passed.append(f"Zone strength {strength:.1f}x")
+    else:
+        failed.append({"factor": "Zone strength", "have": round(strength, 2),
+                       "need": 1.5, "gap": "candle not explosive enough"})
+
+    vol_data = volume_info.get("zone_volumes", {}).get(id(best_zone), {})
+    vol_ratio = vol_data.get("origin_volume_ratio", 0)
+    if vol_ratio >= 1.3:
+        score += VOLUME_CONF
+        passed.append(f"Volume confirmed ({vol_ratio:.1f}x)")
+    else:
+        failed.append({"factor": "Volume at origin", "have": round(vol_ratio, 2),
+                       "need": 1.3, "gap": "low volume at zone formation"})
+
+    return {
+        "symbol": symbol,
+        "zone_top": round(best_zone["top"], 2),
+        "zone_bottom": round(best_zone["bottom"], 2),
+        "direction": direction,
+        "readiness_pct": min(score, 100),
+        "passed": passed,
+        "failed": failed,
+    }
+
+
+# ===================================================================
 # CONVICTION SCORING
 # ===================================================================
 
@@ -480,17 +605,31 @@ def analyze_instrument(symbol, daily_bars, intraday_bars, quote, macro_events, e
     # Pick best candidate for this symbol
     best = max(candidates, key=lambda s: s["conviction_score"]) if candidates else None
 
+    # Volume ratio: last bar vs session average
+    avg_vol = volume_info.get("avg_volume", 0)
+    last_vol = intraday_bars[-1].get("volume", 0) if intraday_bars else 0
+    volume_ratio = round(last_vol / avg_vol, 2) if avg_vol else None
+
+    near_miss = compute_closest_miss(
+        symbol, zones, candidates, nearest_demand, nearest_supply,
+        current_price, volume_info, daily_bars
+    )
+
     return {
         "symbol": symbol,
         "current_price": current_price,
         "trend": trend,
         "prior_week_levels": pw_levels,
         "zones_detected": len(zones),
+        "demand_zones_count": sum(1 for z in zones if z["type"] == "demand"),
+        "supply_zones_count": sum(1 for z in zones if z["type"] == "supply"),
+        "volume_ratio": volume_ratio,
         "nearest_demand": nearest_demand,
         "nearest_supply": nearest_supply,
-        "recent_volume_spikes": volume_info["recent_spikes"],
+        "recent_volume_spikes": volume_info.get("recent_spikes", []),
         "setup": best,
-        "all_candidates": candidates
+        "all_candidates": candidates,
+        "near_miss": near_miss,
     }
 
 

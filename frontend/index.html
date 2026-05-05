@@ -322,6 +322,27 @@
   }
   .no-trade p { color: var(--ink-dim); max-width: 500px; margin: 0 auto; line-height: 1.7; }
 
+  /* Rich no-trade state */
+  .no-trade-rich { background: var(--bg-card); border: 1px solid var(--border); padding: 24px 28px; }
+  .no-trade-rich-top { display: flex; align-items: center; gap: 16px; margin-bottom: 20px; }
+  .no-trade-rich-top .nt-icon { font-family: 'Fraunces', serif; font-size: 48px; font-weight: 300; color: var(--ink-faint); line-height: 1; }
+  .no-trade-rich-top h2 { font-family: 'Fraunces', serif; font-weight: 400; font-size: 22px; margin-bottom: 4px; }
+  .no-trade-rich-top p { color: var(--ink-dim); font-size: 12px; }
+  .no-trade-body { border-top: 1px solid var(--border); padding-top: 20px; display: grid; grid-template-columns: 1.2fr 1fr; gap: 0; }
+  @media (max-width: 640px) { .no-trade-body { grid-template-columns: 1fr; } }
+  .nt-brief { padding-right: 24px; border-right: 1px solid var(--border); }
+  .nt-miss { padding-left: 24px; }
+  .nt-section-label { font-size: 10px; text-transform: uppercase; letter-spacing: .2em; color: var(--ink-faint); margin-bottom: 12px; font-weight: 500; }
+  .readiness-pct { font-family: 'Fraunces', serif; font-size: 28px; color: var(--green); }
+  .readiness-sub { font-size: 9px; text-transform: uppercase; letter-spacing: .15em; color: var(--ink-faint); margin-left: 6px; }
+  .readiness-bar { height: 6px; background: var(--border); border-radius: 3px; overflow: hidden; margin: 8px 0 14px; }
+  .readiness-fill { height: 100%; background: linear-gradient(90deg, var(--accent-dim), var(--green)); border-radius: 3px; }
+  .miss-factor { display: flex; align-items: flex-start; gap: 8px; padding: 4px 0; font-size: 11px; }
+  .miss-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; margin-top: 3px; }
+  .miss-dot.pass { background: var(--green); }
+  .miss-dot.fail { background: var(--red); }
+  .miss-gap { color: var(--red); font-size: 10px; }
+
   /* Loading state */
   .loading {
     text-align: center;
@@ -508,7 +529,7 @@ async function runScan() {
 
     renderTracker(data.tracker_stats);
     renderMacro(data.macro_summary);
-    renderRecommendations(data.setups || []);
+    renderRecommendations(data.setups || [], data);
 
     dot.className = 'status-dot live';
     lastScanTime = new Date();
@@ -618,17 +639,70 @@ function fmtTime(iso) {
   } catch { return iso; }
 }
 
-function renderRecommendations(setups) {
+function renderRecommendations(setups, data) {
   const area = document.getElementById('recsArea');
   const viable = (setups || []).filter(s => s && s.conviction_score !== undefined);
 
   if (viable.length === 0) {
+    const brief = (data && data.daily_brief) || {};
+    const miss = data && data.closest_miss;
+    const macro = (data && data.macro_summary) || {};
+    const spyB = brief.SPY || {};
+    const qqqB = brief.QQQ || {};
+    const macroCount = (macro.high_impact_events || []).length + (macro.earnings_today || []).length;
+
+    const trendIcon = t => t === 'up' ? '↑' : t === 'down' ? '↓' : '→';
+    const trendCol  = t => t === 'up' ? 'var(--green)' : t === 'down' ? 'var(--red)' : 'var(--ink-dim)';
+    const volCol    = r => r >= 1.0 ? 'var(--green)' : 'var(--amber)';
+
+    const briefRows = `
+      <div class="level-row"><span class="k">SPY trend</span><span class="v" style="color:${trendCol(spyB.trend)}">${trendIcon(spyB.trend)} ${spyB.trend || '—'}</span></div>
+      <div class="level-row"><span class="k">QQQ trend</span><span class="v" style="color:${trendCol(qqqB.trend)}">${trendIcon(qqqB.trend)} ${qqqB.trend || '—'}</span></div>
+      <div class="level-row"><span class="k">Volume</span><span class="v" style="color:${spyB.volume_ratio != null ? volCol(spyB.volume_ratio) : ''}">${spyB.volume_ratio != null ? spyB.volume_ratio + 'x avg' : '—'}</span></div>
+      <div class="level-row"><span class="k">Zones found</span><span class="v">SPY ${spyB.zones_detected ?? 0} · QQQ ${qqqB.zones_detected ?? 0}</span></div>
+      <div class="level-row"><span class="k">Macro events</span><span class="v" style="color:${macroCount > 0 ? 'var(--amber)' : 'var(--green)'}">${macroCount > 0 ? macroCount + ' today' : 'None'}</span></div>
+    `;
+
+    let missHtml = '<div style="color:var(--ink-faint);font-size:12px;padding-top:8px;font-style:italic">No zones detected — nothing to score.</div>';
+    if (miss) {
+      const pct = miss.readiness_pct;
+      const passRows = (miss.passed || []).map(p =>
+        `<div class="miss-factor"><div class="miss-dot pass"></div><span style="color:var(--ink)">${p}</span></div>`
+      ).join('');
+      const failRows = (miss.failed || []).map(f =>
+        `<div class="miss-factor"><div class="miss-dot fail"></div><span style="color:var(--ink-dim)">${f.factor} <span style="color:var(--ink)">${f.have}</span> <span class="miss-gap">(${f.gap})</span></span></div>`
+      ).join('');
+      missHtml = `
+        <div style="margin-bottom:6px">
+          <span class="readiness-pct">${pct}%</span>
+          <span class="readiness-sub">to a setup</span>
+        </div>
+        <div class="readiness-bar"><div class="readiness-fill" style="width:${pct}%"></div></div>
+        <div style="font-size:9px;text-transform:uppercase;letter-spacing:.15em;color:var(--ink-faint);margin-bottom:8px">${miss.symbol} · ${miss.direction}</div>
+        ${passRows}${failRows}
+      `;
+    }
+
     area.innerHTML = `
       <div class="recs-header">Today's Setups <span class="count">None qualify</span></div>
-      <div class="no-trade">
-        <div class="icon">∅</div>
-        <h2>No trade today</h2>
-        <p>Neither SPY nor QQQ has a setup that meets the minimum R:R and factor threshold this morning. The discipline is the edge. Check back tomorrow.</p>
+      <div class="no-trade-rich">
+        <div class="no-trade-rich-top">
+          <div class="nt-icon">∅</div>
+          <div>
+            <h2>No qualifying setup</h2>
+            <p>Here's what the market looks like right now.</p>
+          </div>
+        </div>
+        <div class="no-trade-body">
+          <div class="nt-brief">
+            <div class="nt-section-label">Morning Brief</div>
+            ${briefRows}
+          </div>
+          <div class="nt-miss">
+            <div class="nt-section-label">Closest Miss${miss ? ' · ' + miss.symbol : ''}</div>
+            ${missHtml}
+          </div>
+        </div>
       </div>
     `;
     return;

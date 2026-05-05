@@ -161,6 +161,25 @@ def scan():
                 )
             setup["strike_recommendation"] = pick_strike(chain, setup)
 
+        # Build daily brief and pick best closest miss across instruments
+        daily_brief = {}
+        all_near_misses = []
+        for analysis in results:
+            sym = analysis["symbol"]
+            daily_brief[sym] = {
+                "trend": analysis.get("trend"),
+                "zones_detected": analysis.get("zones_detected", 0),
+                "demand_zones": analysis.get("demand_zones_count", 0),
+                "supply_zones": analysis.get("supply_zones_count", 0),
+                "volume_ratio": analysis.get("volume_ratio"),
+            }
+            if analysis.get("near_miss"):
+                all_near_misses.append(analysis["near_miss"])
+        closest_miss = (
+            max(all_near_misses, key=lambda m: m["readiness_pct"])
+            if all_near_misses else None
+        )
+
         # Keep ranked instruments for backward compat
         ranked = rank_setups(results)
 
@@ -179,6 +198,8 @@ def scan():
             "macro_summary": summarize_macro(macro_events, earnings),
             "setups": top_setups,
             "instruments": ranked,
+            "daily_brief": daily_brief,
+            "closest_miss": closest_miss,
             "tracker_stats": stats
         })
 
