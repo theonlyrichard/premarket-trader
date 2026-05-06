@@ -142,24 +142,16 @@ def scan():
                 seen_ids.add(id(s))
 
         # Fetch options chains only for setups we'll display
+        from_str = today.isoformat()
+        to_str = (today + timedelta(days=21)).isoformat()
         for setup in top_setups:
-            target = setup["target_expiry"]
             chain = schwab.get_option_chain(
                 symbol=setup["instrument"],
                 contract_type=setup["direction"],
-                from_date=target,
-                to_date=target
+                from_date=from_str,
+                to_date=to_str
             )
-            if not chain.get("contracts"):
-                today_str = today.isoformat()
-                end_str = (today + timedelta(days=7)).isoformat()
-                chain = schwab.get_option_chain(
-                    symbol=setup["instrument"],
-                    contract_type=setup["direction"],
-                    from_date=today_str,
-                    to_date=end_str
-                )
-            setup["strike_recommendation"] = pick_strike(chain, setup)
+            setup["strike_tiers"] = pick_strike_tiers(chain, setup, today)
 
         # Build daily brief and pick best closest miss across instruments
         daily_brief = {}
@@ -259,24 +251,70 @@ def health():
 # ---------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------
-def pick_strike(chain, setup):
-    """Pick a strike based on setup direction and expected move."""
-    if not chain or "contracts" not in chain:
-        return None
-    current = setup["current_price"]
-    direction = setup["direction"]
-    # Target ~0.40 delta for directional swing trades; user can adjust
-    target_delta = 0.40 if direction == "CALL" else -0.40
-    best = None
-    best_dist = float("inf")
-    for c in chain["contracts"]:
-        if c.get("delta") is None:
-            continue
-        dist = abs(c["delta"] - target_delta)
-        if dist < best_dist:
-            best_dist = dist
-            best = c
-    return best
+def pick_strike_tiers(chain, setup, today):
+    if not chain or not chain.get("contracts"):
+        return []
+
+    is_scalp = setup.get("trade_style") == "scalp"
+    conviction = setup.get("conviction_label", "Medium")
+    macro_hostile = setup.get("macro", {}).get("hostile", False)
+
+    tier_specs = [
+        {"tier": "aggressive", "dte_min": 0, "dte_max": 1 if is_scalp else 3,  "target_delta": 0.60},
+        {"tier": "moderate",   "dte_min": 2 if is_scalp else 7,  "dte_max": 5 if is_scalp else 14, "target_delta": 0.45},
+        {"tier": "conservative","dte_min": 6 if is_scalp else 14, "dte_max": 14 if is_scalp else 21, "target_delta": 0.35},
+    ]
+
+    if macro_hostile or conviction == "Low":
+        rec_tier = "conservative"
+    elif is_scalp and conviction == "High":
+        rec_tier = "aggressive"
+    else:
+        rec_tier = "moderate"
+
+    tiers = []
+    for spec in tier_specs:
+        best = None
+        best_dist = float("inf")
+        for c in chain["contracts"]:
+            if c.get("delta") is None:
+                continue
+            try:
+                exp_date = datetime.strptime(c["expiration"], "%Y-%m-%d").date()
+            except (ValueError, KeyError):
+                continue
+            dte = (exp_date - today).days
+            if dte < spec["dte_min"] or dte > spec["dte_max"]:
+                continue
+            dist = abs(abs(c["delta"]) - spec["target_delta"])
+            if dist < best_dist:
+                best_dist = dist
+                best = c
+                best_dte = dte
+        if best:
+            bid = best.get("bid")
+            ask = best.get("ask")
+            mid = round((bid + ask) / 2, 2) if bid is not None and ask is not None else None
+            tiers.append({
+                "tier": spec["tier"],
+                "recommended": spec["tier"] == rec_tier,
+                "symbol": best.get("symbol", f"{setup['instrument']} {best['strike']}{setup['direction'][0]}"),
+                "strike": best.get("strike"),
+                "expiration": best.get("expiration"),
+                "dte": best_dte,
+                "delta": best.get("delta"),
+                "theta": best.get("theta"),
+                "iv": best.get("iv"),
+                "bid": bid,
+                "ask": ask,
+                "mid": mid,
+            })
+
+    # If rec_tier had no contracts, star the middle available tier
+    if tiers and not any(t["recommended"] for t in tiers):
+        tiers[len(tiers) // 2]["recommended"] = True
+
+    return tiers
 
 
 def summarize_macro(events, earnings):

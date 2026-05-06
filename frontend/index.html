@@ -296,9 +296,45 @@
     border-top: 1px solid var(--border);
     font-size: 12px;
   }
-  .option-strike .strike-label { color: var(--ink-faint); text-transform: uppercase; font-size: 10px; letter-spacing: 0.15em; margin-bottom: 6px; }
-  .option-strike .strike-main { font-family: 'Fraunces', serif; font-size: 18px; color: var(--accent); }
+  .option-strike .strike-label { color: var(--ink-faint); text-transform: uppercase; font-size: 10px; letter-spacing: 0.15em; margin-bottom: 8px; }
   .option-strike .strike-greek { color: var(--ink-dim); margin-top: 4px; font-size: 11px; }
+
+  .tier-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+  .tier-row.two-tiers { grid-template-columns: repeat(2, 1fr); }
+  .tier-row.one-tier { grid-template-columns: 1fr; }
+
+  .tier-pill {
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 8px 10px;
+    font-size: 11px;
+    line-height: 1.4;
+    position: relative;
+  }
+  .tier-pill .pill-label {
+    font-size: 9px;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    font-weight: 600;
+    margin-bottom: 4px;
+  }
+  .tier-pill .pill-contract { font-family: 'Fraunces', serif; font-size: 14px; margin-bottom: 2px; }
+  .tier-pill .pill-expiry { color: var(--ink-dim); font-size: 10px; margin-bottom: 3px; }
+  .tier-pill .pill-greeks { color: var(--ink-dim); font-size: 10px; margin-bottom: 3px; }
+  .tier-pill .pill-mid { font-size: 12px; font-weight: 600; margin-top: 2px; }
+  .tier-pill .pill-star { position: absolute; top: 5px; right: 7px; font-size: 10px; }
+
+  .tier-pill.aggressive .pill-label { color: var(--red); }
+  .tier-pill.aggressive .pill-contract { color: var(--red); }
+  .tier-pill.aggressive.recommended { border-color: var(--red); background: rgba(239,68,68,0.06); }
+
+  .tier-pill.moderate .pill-label { color: var(--amber); }
+  .tier-pill.moderate .pill-contract { color: var(--amber); }
+  .tier-pill.moderate.recommended { border-color: var(--amber); background: rgba(251,191,36,0.06); }
+
+  .tier-pill.conservative .pill-label { color: var(--green); }
+  .tier-pill.conservative .pill-contract { color: var(--green); }
+  .tier-pill.conservative.recommended { border-color: var(--green); background: rgba(34,197,94,0.06); }
 
   /* No-trade state */
   .no-trade {
@@ -727,24 +763,38 @@ function renderRecCard(s) {
   const styleLabel = s.trade_style === 'scalp' ? 'SCALP' : 'SWING';
   const styleCls = s.trade_style === 'scalp' ? 'scalp' : 'swing';
 
-  const strike = s.strike_recommendation;
-  const strikeBlock = strike ? `
-    <div class="option-strike">
-      <div class="strike-label">Suggested contract</div>
-      <div class="strike-main">${strike.symbol || `${s.instrument} ${strike.strike} ${s.direction[0]}`} · exp ${strike.expiration || s.target_expiry}</div>
-      <div class="strike-greek">
-        Δ ${strike.delta?.toFixed(2) ?? '—'}
-        · Θ ${strike.theta?.toFixed(2) ?? '—'}
-        · IV ${strike.iv ? (strike.iv * 100).toFixed(1) + '%' : '—'}
-        · bid/ask ${strike.bid ?? '—'}/${strike.ask ?? '—'}
-      </div>
-    </div>
-  ` : `
-    <div class="option-strike">
-      <div class="strike-label">Suggested contract</div>
-      <div class="strike-greek">Fetch option chain to populate strike (requires Schwab auth).</div>
-    </div>
-  `;
+  const tiers = s.strike_tiers;
+  let strikeBlock;
+  if (tiers && tiers.length > 0) {
+    const colsCls = tiers.length === 1 ? 'one-tier' : tiers.length === 2 ? 'two-tiers' : '';
+    const pills = tiers.map(t => {
+      const monthDay = t.expiration
+        ? new Date(t.expiration + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+        : '—';
+      const recCls = t.recommended ? ' recommended' : '';
+      const star = t.recommended ? `<span class="pill-star">★</span>` : '';
+      return `
+        <div class="tier-pill ${t.tier}${recCls}">
+          ${star}
+          <div class="pill-label">${t.tier}</div>
+          <div class="pill-contract">${t.symbol}</div>
+          <div class="pill-expiry">${monthDay} · ${t.dte}dte</div>
+          <div class="pill-greeks">Δ ${t.delta != null ? Math.abs(t.delta).toFixed(2) : '—'} · IV ${t.iv != null ? (t.iv * 100).toFixed(1) + '%' : '—'}</div>
+          <div class="pill-mid">${t.mid != null ? '~$' + t.mid : '—'}</div>
+        </div>`;
+    }).join('');
+    strikeBlock = `
+      <div class="option-strike">
+        <div class="strike-label">Suggested contracts</div>
+        <div class="tier-row ${colsCls}">${pills}</div>
+      </div>`;
+  } else {
+    strikeBlock = `
+      <div class="option-strike">
+        <div class="strike-label">Suggested contracts</div>
+        <div class="strike-greek">Fetch option chain to populate strike (requires Schwab auth).</div>
+      </div>`;
+  }
 
   const breakdown = s.conviction_breakdown || {};
   const breakdownRows = Object.entries(breakdown).map(([k, v]) => {
