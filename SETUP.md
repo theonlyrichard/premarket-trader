@@ -1,5 +1,25 @@
 # Pre-Market Research Desk — Setup Guide
 
+## Quick Start (after first-time setup is done)
+
+Open a terminal and run these commands:
+
+```
+cd C:\Users\richa\Desktop\VibeCodedProjects\premarket-trader
+.\venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+cd backend
+python app.py
+```
+
+> `pip install` only needed the first time. Skip it on subsequent runs.
+
+Then open **http://127.0.0.1:5000** in your browser and click **Run Morning Scan**.
+
+To stop the server: `Ctrl+C`
+
+---
+
 This is a local dashboard that runs on your computer. It pulls pre-market data from Schwab and macro events from Finnhub, analyzes SPY and QQQ for supply/demand setups with volume confirmation, and gives you up to 2 trade recommendations each morning.
 
 The whole stack is free. No subscriptions. You need Python installed and a Schwab brokerage account.

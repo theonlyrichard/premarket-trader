@@ -470,6 +470,15 @@
     text-transform: uppercase;
   }
 
+  /* Auto-scan */
+  .btn-auto-on { border-color: var(--green) !important; color: var(--green) !important; }
+  .countdown-display { font-size: 11px; color: var(--ink-faint); font-variant-numeric: tabular-nums; min-width: 130px; }
+  @keyframes newSetupPulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(201, 169, 97, 0); }
+    50% { box-shadow: 0 0 0 12px rgba(201, 169, 97, 0.35); }
+  }
+  .new-setup { animation: newSetupPulse 1.2s ease-in-out 4; border-color: var(--accent) !important; }
+
   @media (max-width: 600px) {
     .container { padding: 24px 16px 60px; }
     h1 { font-size: 28px; }
@@ -497,8 +506,10 @@
 
   <div class="scan-bar">
     <button class="primary" onclick="runScan()" id="scanBtn">Run Morning Scan</button>
+    <button id="autoScanBtn" onclick="toggleAutoScan()">Auto-Scan: Off</button>
     <button onclick="toggleHistory()" id="historyBtn">View History</button>
     <span class="last-scan" id="lastScan"></span>
+    <span class="countdown-display" id="countdown" style="display:none"></span>
   </div>
 
   <div id="trackerBar"></div>
@@ -530,7 +541,19 @@ document.getElementById('todayDate').textContent = new Date().toLocaleDateString
 let lastScanTime = null;
 const loading = document.getElementById('loadingBox');
 
-async function runScan() {
+// Auto-scan state
+let previousFingerprints = new Set();
+let _pendingNewSetups = new Set();
+let autoScanEnabled = false;
+let autoScanTimer = null;
+let countdownInterval = null;
+let secondsUntilScan = 600;
+
+function setupFingerprint(s) {
+  return `${s.instrument}_${s.direction}_${s.zone_bottom.toFixed(2)}`;
+}
+
+async function runScan(fromAuto = false) {
   const btn = document.getElementById('scanBtn');
   const recsArea = document.getElementById('recsArea');
   const errBox = document.getElementById('errorBox');
@@ -563,13 +586,27 @@ async function runScan() {
       return;
     }
 
+    const viable = (data.setups || []).filter(s => s && s.conviction_score !== undefined);
+
+    // Detect new setups on auto-scan (skip first auto-scan which seeds fingerprints)
+    _pendingNewSetups.clear();
+    if (fromAuto && previousFingerprints.size > 0) {
+      const newSetups = viable.filter(s => !previousFingerprints.has(setupFingerprint(s)));
+      newSetups.forEach(s => _pendingNewSetups.add(setupFingerprint(s)));
+      if (newSetups.length > 0) notifyNewSetups(newSetups);
+    }
+
     renderTracker(data.tracker_stats);
     renderMacro(data.macro_summary);
     renderRecommendations(data.setups || [], data);
+    _pendingNewSetups.clear();
+
+    // Seed/update fingerprints for next comparison
+    previousFingerprints = new Set(viable.map(s => setupFingerprint(s)));
 
     dot.className = 'status-dot live';
     lastScanTime = new Date();
-    statusText.textContent = 'Scan complete';
+    statusText.textContent = fromAuto ? 'Auto-scan complete' : 'Scan complete';
     document.getElementById('lastScan').textContent =
       `Last scan: ${lastScanTime.toLocaleTimeString()}`;
   } catch (e) {
@@ -582,6 +619,84 @@ async function runScan() {
     btn.disabled = false;
     loading.style.display = 'none';
   }
+}
+
+// ── Auto-scan ────────────────────────────────────────────────────────
+
+function toggleAutoScan() {
+  if (autoScanEnabled) stopAutoScan(); else startAutoScan();
+}
+
+function startAutoScan() {
+  autoScanEnabled = true;
+  const btn = document.getElementById('autoScanBtn');
+  btn.textContent = 'Auto-Scan: On';
+  btn.classList.add('btn-auto-on');
+  if ('Notification' in window && Notification.permission === 'default') {
+    Notification.requestPermission();
+  }
+  runScanAuto();
+}
+
+function stopAutoScan() {
+  autoScanEnabled = false;
+  clearTimeout(autoScanTimer);
+  clearInterval(countdownInterval);
+  const btn = document.getElementById('autoScanBtn');
+  btn.textContent = 'Auto-Scan: Off';
+  btn.classList.remove('btn-auto-on');
+  document.getElementById('countdown').style.display = 'none';
+}
+
+async function runScanAuto() {
+  if (!autoScanEnabled) return;
+  await runScan(true);
+  if (autoScanEnabled) scheduleNextAutoScan();
+}
+
+function scheduleNextAutoScan() {
+  secondsUntilScan = 600;
+  const el = document.getElementById('countdown');
+  el.style.display = 'inline';
+  updateCountdown();
+  clearInterval(countdownInterval);
+  countdownInterval = setInterval(() => { secondsUntilScan--; updateCountdown(); }, 1000);
+  clearTimeout(autoScanTimer);
+  autoScanTimer = setTimeout(runScanAuto, 600000);
+}
+
+function updateCountdown() {
+  const s = Math.max(0, secondsUntilScan);
+  const m = Math.floor(s / 60);
+  document.getElementById('countdown').textContent =
+    `Next scan in ${m}:${(s % 60).toString().padStart(2, '0')}`;
+}
+
+function notifyNewSetups(setups) {
+  if ('Notification' in window && Notification.permission === 'granted') {
+    const body = setups.map(s => `${s.instrument} ${s.direction} · ${s.conviction_label}`).join('\n');
+    new Notification('New Setup Found', { body });
+  }
+  playChime();
+}
+
+function playChime() {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    [523, 659, 784].forEach((freq, i) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.frequency.value = freq;
+      osc.type = 'sine';
+      const t = ctx.currentTime + i * 0.16;
+      gain.gain.setValueAtTime(0.25, t);
+      gain.gain.exponentialRampToValueAtTime(0.001, t + 0.45);
+      osc.start(t);
+      osc.stop(t + 0.5);
+    });
+  } catch (e) { /* AudioContext unavailable */ }
 }
 
 function renderTracker(stats) {
@@ -755,6 +870,7 @@ function renderRecommendations(setups, data) {
 }
 
 function renderRecCard(s) {
+  const isNew = _pendingNewSetups.has(setupFingerprint(s));
   const conviction = (s.conviction_label || 'Low').toLowerCase();
   const zoneRange = `${s.zone_bottom.toFixed(2)} – ${s.zone_top.toFixed(2)}`;
   const confluenceStr = (s.confluence_factors || []).length
@@ -814,7 +930,7 @@ function renderRecCard(s) {
     : `<div class="factor-row"><span class="fk">Macro risk</span><span class="fv pos">Clear</span></div>`;
 
   return `
-    <div class="rec-card ${conviction}">
+    <div class="rec-card ${conviction}${isNew ? ' new-setup' : ''}">
       <div class="rec-head">
         <div class="rec-symbol">${s.instrument}</div>
         <div class="rec-summary">
@@ -918,10 +1034,11 @@ async function loadHistory() {
 
 function buildHeadline(setup) {
   const zoneType = setup.direction === 'CALL' ? 'demand' : 'supply';
-  const fresh = setup.zone_fresh ? 'Fresh' : 'Tested';
+  const status = setup.zone_status || (setup.zone_fresh ? 'fresh' : 'tested');
+  const statusLabel = status === 'fresh' ? 'Fresh' : 'Tested & holding';
   const vol = setup.volume_origin_ratio >= 1.8 ? 'high-volume' :
               setup.volume_origin_ratio >= 1.3 ? 'moderate-volume' : 'low-volume';
-  return `${fresh} ${vol} ${zoneType} zone reaction.`;
+  return `${statusLabel} ${vol} ${zoneType} zone reaction.`;
 }
 </script>
 </body>

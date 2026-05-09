@@ -50,8 +50,8 @@ def detect_zones(intraday_bars, lookback_bars=100):
         curr_range = curr["high"] - curr["low"]
         curr_body = abs(curr["close"] - curr["open"])
 
-        # Explosive candle: range > 1.2x average AND body > 50% of range
-        is_explosive = curr_range > avg_range * 1.2 and curr_body > curr_range * 0.5
+        # Explosive candle: range >= average AND body > 50% of range
+        is_explosive = curr_range > avg_range * 1.0 and curr_body > curr_range * 0.5
 
         if is_explosive:
             # Look back 1-3 bars for a base (narrow range consolidation)
@@ -65,12 +65,30 @@ def detect_zones(intraday_bars, lookback_bars=100):
                 zone_bottom = min(b["low"] for b in base_bars)
                 direction = "demand" if curr["close"] > curr["open"] else "supply"
 
-                # Check freshness — has price revisited this zone after origin?
-                revisited = False
+                # Classify zone status by what subsequent bars do:
+                #   fresh  — price has never returned to the zone
+                #   tested — price entered the zone but close never went beyond it
+                #   broken — a close went past the zone's far boundary (support/resistance broke)
+                # Only fresh and tested zones qualify as setups.
+                status = "fresh"
                 for j in range(i + 1, len(bars)):
-                    if bars[j]["low"] <= zone_top and bars[j]["high"] >= zone_bottom:
-                        revisited = True
-                        break
+                    b = bars[j]
+                    if direction == "demand":
+                        if b["close"] < zone_bottom:
+                            # Close went below support — zone is broken
+                            status = "broken"
+                            break
+                        elif b["low"] <= zone_top and status == "fresh":
+                            # Price entered the zone but hasn't broken it yet — tested
+                            status = "tested"
+                    else:  # supply
+                        if b["close"] > zone_top:
+                            # Close went above resistance — zone is broken
+                            status = "broken"
+                            break
+                        elif b["high"] >= zone_bottom and status == "fresh":
+                            # Price entered the zone but hasn't broken it yet — tested
+                            status = "tested"
 
                 zones.append({
                     "type": direction,
@@ -79,7 +97,8 @@ def detect_zones(intraday_bars, lookback_bars=100):
                     "origin_index": i,
                     "origin_time": curr.get("datetime"),
                     "strength": curr_range / avg_range if avg_range else 1.0,
-                    "fresh": not revisited
+                    "status": status,
+                    "fresh": status == "fresh",  # kept for backward compat
                 })
                 i += 1
         i += 1
@@ -88,9 +107,10 @@ def detect_zones(intraday_bars, lookback_bars=100):
 
 
 def find_nearest_zones(zones, current_price):
-    """Return the nearest fresh demand below and fresh supply above."""
-    demand = [z for z in zones if z["type"] == "demand" and z["top"] < current_price and z["fresh"]]
-    supply = [z for z in zones if z["type"] == "supply" and z["bottom"] > current_price and z["fresh"]]
+    """Return the nearest qualifying demand below and supply above.
+    Fresh and tested zones both qualify; broken zones are excluded."""
+    demand = [z for z in zones if z["type"] == "demand" and z["top"] < current_price and z.get("status", "fresh") != "broken"]
+    supply = [z for z in zones if z["type"] == "supply" and z["bottom"] > current_price and z.get("status", "fresh") != "broken"]
 
     nearest_demand = max(demand, key=lambda z: z["top"]) if demand else None
     nearest_supply = min(supply, key=lambda z: z["bottom"]) if supply else None
@@ -351,6 +371,7 @@ def build_setup(symbol, zone, current_price, confluence_factors, volume_info,
         "target_expiry": target_expiry,
         "confluence_factors": confluence_factors,
         "zone_fresh": zone["fresh"],
+        "zone_status": zone.get("status", "fresh" if zone.get("fresh") else "tested"),
         "zone_strength": round(zone["strength"], 2),
         "trade_style": trade_style,
         "volume_origin_ratio": volume_info.get("zone_volumes", {}).get(
@@ -497,12 +518,16 @@ def score_conviction(setup, macro_info, volume_info):
     score = 0
     breakdown = {}
 
-    # Zone freshness (0-2)
-    if setup["zone_fresh"]:
+    # Zone freshness (0-2): fresh = never tested, tested = held on touch, broken = excluded
+    zone_status = setup.get("zone_status", "fresh" if setup.get("zone_fresh") else "tested")
+    if zone_status == "fresh":
         score += 2
         breakdown["zone_freshness"] = "Fresh (+2)"
+    elif zone_status == "tested":
+        score += 1
+        breakdown["zone_freshness"] = "Tested & holding (+1)"
     else:
-        breakdown["zone_freshness"] = "Tested (+0)"
+        breakdown["zone_freshness"] = "Broken (+0)"
 
     # Zone strength (0-2)
     if setup["zone_strength"] >= 2.0:
