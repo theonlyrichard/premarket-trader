@@ -1177,9 +1177,157 @@ function buildHeadline(setup) {
   return `${statusLabel} ${vol} ${zoneType} zone reaction.`;
 }
 
-function openChartModal(index) {
-  console.log('openChartModal stub — index:', index, _currentSetups[index]);
+// ── Chart modal ────────────────────────────────────────────────
+
+let _chartData   = null;  // { symbol, intraday: [], daily: [] }
+let _chartSetup  = null;  // setup object for the open card
+let _chartTf     = '30m'; // active timeframe toggle
+let _chartInst   = null;  // LightweightCharts instance
+let _candleSeries = null;
+let _chartResizeObserver = null;
+
+async function openChartModal(index) {
+  const setup = _currentSetups[index];
+  if (!setup) return;
+  _chartSetup = setup;
+  _chartTf = '30m';
+
+  // Populate topbar
+  document.getElementById('chartModalSymbol').textContent = setup.instrument;
+  const badge = document.getElementById('chartModalBadge');
+  badge.className = `direction ${setup.direction}`;
+  badge.style.cssText = 'padding:3px 10px;font-size:11px;font-weight:700;letter-spacing:0.15em';
+  badge.textContent = setup.direction;
+  document.getElementById('chartModalMeta').textContent =
+    `Current ${setup.current_price.toFixed(2)} · Score ${setup.conviction_score}/10`;
+
+  // Show modal
+  document.getElementById('chartModal').style.display = 'flex';
+  document.body.style.overflow = 'hidden';
+  _setActiveTfBtn('30m');
+
+  // Loading placeholder
+  const container = document.getElementById('chartContainer');
+  container.innerHTML =
+    '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--ink-faint);font-size:12px">Loading chart…</div>';
+  document.getElementById('chartLegend').innerHTML = '';
+
+  try {
+    const resp = await fetch(`/api/chart/${setup.instrument}`);
+    const data = await resp.json();
+    if (data.error) throw new Error(data.error);
+    _chartData = data;
+    container.innerHTML = '';
+    _renderChart('30m');
+  } catch (e) {
+    container.innerHTML =
+      `<div class="error-box" style="margin:0"><strong>Chart error:</strong> ${e.message}</div>`;
+  }
 }
+
+function closeChartModal(event) {
+  // Allow: direct call (no event) or backdrop click (event.target === backdrop)
+  if (event && event.target !== document.getElementById('chartModal')) return;
+  document.getElementById('chartModal').style.display = 'none';
+  document.body.style.overflow = '';
+  if (_chartResizeObserver) { _chartResizeObserver.disconnect(); _chartResizeObserver = null; }
+  if (_chartInst) { _chartInst.remove(); _chartInst = null; _candleSeries = null; }
+  _chartData = null;
+  _chartSetup = null;
+}
+
+function switchChartTimeframe(tf) {
+  if (!_chartData || tf === _chartTf) return;
+  _chartTf = tf;
+  _setActiveTfBtn(tf);
+  if (_chartResizeObserver) { _chartResizeObserver.disconnect(); _chartResizeObserver = null; }
+  if (_chartInst) { _chartInst.remove(); _chartInst = null; _candleSeries = null; }
+  document.getElementById('chartContainer').innerHTML = '';
+  _renderChart(tf);
+}
+
+function _setActiveTfBtn(tf) {
+  document.getElementById('tfBtn30m').className = tf === '30m' ? 'tf-btn active' : 'tf-btn';
+  document.getElementById('tfBtn1D').className  = tf === '1D'  ? 'tf-btn active' : 'tf-btn';
+}
+
+function _renderChart(tf) {
+  const container = document.getElementById('chartContainer');
+  const setup = _chartSetup;
+  const candles = tf === '30m' ? _chartData.intraday : _chartData.daily;
+
+  _chartInst = LightweightCharts.createChart(container, {
+    width: container.clientWidth,
+    height: 340,
+    layout: { background: { color: '#0a0d12' }, textColor: '#8a95a8' },
+    grid: { vertLines: { color: '#1a2030' }, horzLines: { color: '#1a2030' } },
+    crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+    rightPriceScale: { borderColor: '#242b38' },
+    timeScale: { borderColor: '#242b38', timeVisible: true },
+  });
+
+  _candleSeries = _chartInst.addCandlestickSeries({
+    upColor: '#4ade80', downColor: '#f87171',
+    borderUpColor: '#4ade80', borderDownColor: '#f87171',
+    wickUpColor: '#4ade80', wickDownColor: '#f87171',
+  });
+
+  // Schwab returns datetime in milliseconds; Lightweight Charts expects seconds
+  _candleSeries.setData(
+    candles
+      .map(c => ({ time: Math.floor(c.datetime / 1000), open: c.open, high: c.high, low: c.low, close: c.close }))
+      .sort((a, b) => a.time - b.time)
+  );
+
+  // Entry price: zone_top for CALL (break above), zone_bottom for PUT (break below)
+  const entryPrice = setup.direction === 'CALL' ? setup.zone_top : setup.zone_bottom;
+
+  const overlays = [
+    { price: setup.target,    color: '#4ade80', style: LightweightCharts.LineStyle.Dashed, title: 'Target'  },
+    { price: entryPrice,      color: '#60a5fa', style: LightweightCharts.LineStyle.Solid,  title: 'Entry'   },
+    { price: setup.zone_top,  color: '#c9a961', style: LightweightCharts.LineStyle.Dashed, title: 'Zone ▲'  },
+    { price: setup.zone_bottom, color: '#c9a961', style: LightweightCharts.LineStyle.Dashed, title: 'Zone ▼' },
+    { price: setup.stop,      color: '#f87171', style: LightweightCharts.LineStyle.Dashed, title: 'Stop'    },
+    { price: setup.current_price, color: '#5a6578', style: LightweightCharts.LineStyle.Solid, title: 'Price' },
+  ];
+  overlays.forEach(({ price, color, style, title }) => {
+    _candleSeries.createPriceLine({ price, color, lineStyle: style, lineWidth: 1, axisLabelVisible: true, title });
+  });
+
+  _chartInst.timeScale().fitContent();
+
+  // Resize handler so chart fills container if window is resized
+  _chartResizeObserver = new ResizeObserver(() => {
+    if (_chartInst) _chartInst.applyOptions({ width: container.clientWidth });
+  });
+  _chartResizeObserver.observe(container);
+
+  _renderChartLegend(setup, entryPrice);
+}
+
+function _renderChartLegend(setup, entryPrice) {
+  const items = [
+    { label: 'Target',  val: setup.target.toFixed(2),           color: '#4ade80' },
+    { label: 'Entry',   val: entryPrice.toFixed(2),              color: '#60a5fa' },
+    { label: 'Zone',    val: `${setup.zone_bottom.toFixed(2)} – ${setup.zone_top.toFixed(2)}`, color: '#c9a961' },
+    { label: 'Stop',    val: setup.stop.toFixed(2),              color: '#f87171' },
+    { label: 'Current', val: setup.current_price.toFixed(2),    color: '#8a95a8' },
+  ];
+  document.getElementById('chartLegend').innerHTML = items.map(({ label, val, color }) => `
+    <div class="chart-legend-item">
+      <div class="chart-legend-swatch" style="background:${color}"></div>
+      <span class="chart-legend-name">${label}</span>
+      <span class="chart-legend-val" style="color:${color}">${val}</span>
+    </div>
+  `).join('');
+}
+
+// Close modal on ESC key
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && document.getElementById('chartModal').style.display !== 'none') {
+    closeChartModal();
+  }
+});
 </script>
 </body>
 </html>
