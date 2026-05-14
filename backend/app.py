@@ -232,6 +232,26 @@ def history():
     return jsonify([dict(r) for r in rows])
 
 
+@app.route("/api/chart/<symbol>", methods=["GET"])
+def chart(symbol):
+    """Return intraday (30-min, 5-day) and daily (1-month) candle series."""
+    if symbol not in ("SPY", "QQQ"):
+        return jsonify({"error": f"unsupported symbol: {symbol}"}), 400
+    try:
+        intraday = schwab.get_price_history(
+            symbol, period_type="day", period=5,
+            frequency_type="minute", frequency=30
+        )
+        daily = schwab.get_price_history(
+            symbol, period_type="month", period=1,
+            frequency_type="daily", frequency=1
+        )
+        return jsonify({"symbol": symbol, "intraday": intraday, "daily": daily})
+    except Exception as e:
+        app.logger.exception("chart fetch failed")
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/api/health", methods=["GET"])
 def health():
     finnhub_ok = False
