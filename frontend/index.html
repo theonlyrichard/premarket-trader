@@ -673,6 +673,7 @@ document.getElementById('todayDate').textContent = new Date().toLocaleDateString
 
 let lastScanTime = null;
 const loading = document.getElementById('loadingBox');
+let _currentSetups = [];
 
 // Auto-scan state
 let previousFingerprints = new Set();
@@ -993,16 +994,17 @@ function renderRecommendations(setups, data) {
   }
 
   const top = viable.slice(0, 4);
+  _currentSetups = top;
   area.innerHTML = `
     <div class="recs-header">
       Today's Setups
       <span class="count">${top.length} recommendation${top.length > 1 ? 's' : ''}</span>
     </div>
-    ${top.map(renderRecCard).join('')}
+    ${top.map((s, i) => renderRecCard(s, i)).join('')}
   `;
 }
 
-function renderRecCard(s) {
+function renderRecCard(s, index) {
   const isNew = _pendingNewSetups.has(setupFingerprint(s));
   const conviction = (s.conviction_label || 'Low').toLowerCase();
   const zoneRange = `${s.zone_bottom.toFixed(2)} – ${s.zone_top.toFixed(2)}`;
@@ -1076,6 +1078,7 @@ function renderRecCard(s) {
             Current ${s.current_price.toFixed(2)} · Zone ${zoneRange} · R:R 1:${s.rr_ratio}
           </div>
         </div>
+        <button class="chart-btn" onclick="openChartModal(${index})">📈 View Chart</button>
         <div class="rec-conviction">
           <div class="label">Conviction</div>
           <div class="value ${s.conviction_label}">${s.conviction_label}</div>
@@ -1172,6 +1175,10 @@ function buildHeadline(setup) {
   const vol = setup.volume_origin_ratio >= 1.8 ? 'high-volume' :
               setup.volume_origin_ratio >= 1.3 ? 'moderate-volume' : 'low-volume';
   return `${statusLabel} ${vol} ${zoneType} zone reaction.`;
+}
+
+function openChartModal(index) {
+  console.log('openChartModal stub — index:', index, _currentSetups[index]);
 }
 </script>
 </body>
