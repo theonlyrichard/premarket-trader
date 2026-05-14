@@ -19,6 +19,13 @@ def flask_app():
     return _app.app
 
 
+@pytest.fixture(autouse=True)
+def reset_schwab_mock():
+    import app as _app_module
+    _app_module.schwab.get_price_history.reset_mock()
+    _app_module.schwab.get_price_history.side_effect = None
+
+
 @pytest.fixture
 def client(flask_app):
     with flask_app.test_client() as c:

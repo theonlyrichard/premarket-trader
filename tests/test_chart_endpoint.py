@@ -1,3 +1,4 @@
+from unittest.mock import call
 import app as flask_app
 
 FAKE_CANDLES = [
@@ -9,7 +10,6 @@ FAKE_CANDLES = [
 
 
 def test_chart_returns_intraday_and_daily(client):
-    flask_app.schwab.get_price_history.reset_mock()
     flask_app.schwab.get_price_history.return_value = FAKE_CANDLES
 
     resp = client.get("/api/chart/SPY")
@@ -21,15 +21,19 @@ def test_chart_returns_intraday_and_daily(client):
     assert data["daily"] == FAKE_CANDLES
     assert flask_app.schwab.get_price_history.call_count == 2
 
+    calls = flask_app.schwab.get_price_history.call_args_list
+    assert calls[0] == call("SPY", period_type="day", period=5, frequency_type="minute", frequency=30)
+    assert calls[1] == call("SPY", period_type="month", period=1, frequency_type="daily", frequency=1)
+
 
 def test_chart_qqq_also_works(client):
-    flask_app.schwab.get_price_history.reset_mock()
     flask_app.schwab.get_price_history.return_value = FAKE_CANDLES
 
     resp = client.get("/api/chart/QQQ")
 
     assert resp.status_code == 200
     assert resp.get_json()["symbol"] == "QQQ"
+    assert flask_app.schwab.get_price_history.call_count == 2
 
 
 def test_chart_rejects_unknown_symbol(client):
@@ -45,5 +49,3 @@ def test_chart_handles_schwab_error(client):
 
     assert resp.status_code == 500
     assert "error" in resp.get_json()
-
-    flask_app.schwab.get_price_history.side_effect = None  # reset for later tests
