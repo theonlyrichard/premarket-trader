@@ -173,7 +173,7 @@
   .rec-head {
     padding: 24px 28px 20px;
     display: grid;
-    grid-template-columns: auto 1fr auto;
+    grid-template-columns: auto 1fr auto auto;
     gap: 24px;
     align-items: center;
     border-bottom: 1px solid var(--border);
@@ -485,7 +485,114 @@
     .rec-head { grid-template-columns: 1fr; gap: 12px; }
     .rec-symbol { font-size: 36px; }
   }
+
+  /* Chart button on setup cards */
+  .chart-btn {
+    background: transparent;
+    border: 1px solid var(--border-bright);
+    color: var(--ink-dim);
+    padding: 8px 14px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.15em;
+    cursor: pointer;
+    transition: all 0.15s;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    white-space: nowrap;
+    align-self: center;
+  }
+  .chart-btn:hover { border-color: var(--accent); color: var(--accent); }
+
+  /* Chart modal */
+  .chart-modal-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(5, 7, 10, 0.88);
+    z-index: 1000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+  }
+  .chart-modal {
+    background: var(--bg-card);
+    border: 1px solid var(--border-bright);
+    width: 100%;
+    max-width: 900px;
+    padding: 20px 24px 24px;
+  }
+  .chart-modal-topbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 16px;
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+  .chart-modal-symbol-block {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+  .chart-modal-symbol {
+    font-family: 'Fraunces', serif;
+    font-size: 28px;
+    font-weight: 500;
+    letter-spacing: -0.02em;
+  }
+  .chart-modal-meta { font-size: 11px; color: var(--ink-dim); }
+  .chart-modal-controls { display: flex; align-items: center; gap: 10px; }
+  .timeframe-toggle {
+    display: inline-flex;
+    border: 1px solid var(--border-bright);
+    border-radius: 3px;
+    overflow: hidden;
+  }
+  .tf-btn {
+    padding: 5px 14px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    cursor: pointer;
+    border: none;
+    background: transparent;
+    color: var(--ink-faint);
+    transition: all 0.12s;
+  }
+  .tf-btn.active { background: var(--bg-elevated); color: var(--ink); }
+  .chart-container { height: 340px; }
+  .chart-legend {
+    display: flex;
+    gap: 20px;
+    flex-wrap: wrap;
+    margin-top: 10px;
+    padding: 10px 14px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    font-size: 11px;
+  }
+  .chart-legend-item { display: flex; align-items: center; gap: 6px; }
+  .chart-legend-swatch { width: 20px; height: 2px; border-radius: 1px; flex-shrink: 0; }
+  .chart-legend-name { color: var(--ink-faint); text-transform: uppercase; font-size: 9px; letter-spacing: 0.12em; }
+  .chart-legend-val { font-weight: 500; }
+  .chart-close-btn {
+    background: transparent;
+    border: 1px solid var(--border-bright);
+    color: var(--ink-dim);
+    padding: 5px 10px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .chart-close-btn:hover { border-color: var(--red); color: var(--red); }
 </style>
+<script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
 </head>
 <body>
 <div class="container">
@@ -531,6 +638,27 @@
   </div>
 
   <footer>Not financial advice · Local dashboard · v0.2</footer>
+</div>
+
+<div id="chartModal" class="chart-modal-backdrop" style="display:none" onclick="closeChartModal(event)">
+  <div class="chart-modal" onclick="event.stopPropagation()">
+    <div class="chart-modal-topbar">
+      <div class="chart-modal-symbol-block">
+        <div class="chart-modal-symbol" id="chartModalSymbol"></div>
+        <div id="chartModalBadge" class="direction" style="padding:3px 10px;font-size:11px;font-weight:700;letter-spacing:0.15em"></div>
+        <div class="chart-modal-meta" id="chartModalMeta"></div>
+      </div>
+      <div class="chart-modal-controls">
+        <div class="timeframe-toggle">
+          <button class="tf-btn active" id="tfBtn30m" onclick="switchChartTimeframe('30m')">30m</button>
+          <button class="tf-btn" id="tfBtn1D" onclick="switchChartTimeframe('1D')">1D</button>
+        </div>
+        <button class="chart-close-btn" onclick="closeChartModal()">✕ Close</button>
+      </div>
+    </div>
+    <div id="chartContainer" class="chart-container"></div>
+    <div id="chartLegend" class="chart-legend"></div>
+  </div>
 </div>
 
 <script>
