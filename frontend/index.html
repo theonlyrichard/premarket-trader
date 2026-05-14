@@ -523,6 +523,8 @@
     width: 100%;
     max-width: 900px;
     padding: 20px 24px 24px;
+    max-height: calc(100vh - 48px);
+    overflow-y: auto;
   }
   .chart-modal-topbar {
     display: flex;
@@ -565,6 +567,7 @@
     transition: all 0.12s;
   }
   .tf-btn.active { background: var(--bg-elevated); color: var(--ink); }
+  .tf-btn:hover { color: var(--ink); }
   .chart-container { height: 340px; }
   .chart-legend {
     display: flex;
@@ -591,6 +594,8 @@
     transition: all 0.15s;
   }
   .chart-close-btn:hover { border-color: var(--red); color: var(--red); }
+  .direction.CALL { background: rgba(74, 222, 128, 0.15); color: var(--green); border: 1px solid var(--green); }
+  .direction.PUT  { background: rgba(248, 113, 113, 0.15); color: var(--red);   border: 1px solid var(--red);  }
 </style>
 <script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
 </head>
