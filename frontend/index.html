@@ -1185,12 +1185,15 @@ let _chartTf     = '30m'; // active timeframe toggle
 let _chartInst   = null;  // LightweightCharts instance
 let _candleSeries = null;
 let _chartResizeObserver = null;
+let _chartOpenToken = null; // cancellation token: if modal closes during fetch, abandon result
 
 async function openChartModal(index) {
   const setup = _currentSetups[index];
   if (!setup) return;
   _chartSetup = setup;
   _chartTf = '30m';
+  const thisOpen = Symbol();
+  _chartOpenToken = thisOpen;
 
   // Populate topbar
   document.getElementById('chartModalSymbol').textContent = setup.instrument;
@@ -1214,12 +1217,15 @@ async function openChartModal(index) {
 
   try {
     const resp = await fetch(`/api/chart/${setup.instrument}`);
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const data = await resp.json();
     if (data.error) throw new Error(data.error);
+    if (_chartOpenToken !== thisOpen) return; // modal closed during fetch
     _chartData = data;
     container.innerHTML = '';
     _renderChart('30m');
   } catch (e) {
+    if (_chartOpenToken !== thisOpen) return; // modal closed during fetch
     container.innerHTML =
       `<div class="error-box" style="margin:0"><strong>Chart error:</strong> ${e.message}</div>`;
   }
@@ -1230,6 +1236,8 @@ function closeChartModal(event) {
   if (event && event.target !== document.getElementById('chartModal')) return;
   document.getElementById('chartModal').style.display = 'none';
   document.body.style.overflow = '';
+  _chartOpenToken = null;
+  _chartTf = '30m';
   if (_chartResizeObserver) { _chartResizeObserver.disconnect(); _chartResizeObserver = null; }
   if (_chartInst) { _chartInst.remove(); _chartInst = null; _candleSeries = null; }
   _chartData = null;
@@ -1254,7 +1262,11 @@ function _setActiveTfBtn(tf) {
 function _renderChart(tf) {
   const container = document.getElementById('chartContainer');
   const setup = _chartSetup;
-  const candles = tf === '30m' ? _chartData.intraday : _chartData.daily;
+  const candles = tf === '30m' ? _chartData?.intraday : _chartData?.daily;
+  if (!Array.isArray(candles) || candles.length === 0) {
+    container.innerHTML = '<div class="error-box" style="margin:0">No candle data available.</div>';
+    return;
+  }
 
   _chartInst = LightweightCharts.createChart(container, {
     width: container.clientWidth,
