@@ -2,17 +2,15 @@
 Pre-Market Research Desk — Backend
 ===================================
 
-This is a local Flask server that:
-  1. Pulls pre-market data from Schwab API (price, options chains, historical bars)
-  2. Pulls macro calendar from Finnhub API (economic events, earnings)
-  3. Runs the supply/demand + volume analysis pipeline
-  4. Serves the frontend dashboard at http://127.0.0.1:5000
-  5. Silently tracks recommended setups and their outcomes in a local SQLite database
+Local Flask server:
+  1. Schwab: price, extended-hours bars, options chains
+  2. Finnhub: macro calendar + mega-cap earnings
+  3. Carmine-aligned S/D + premarket pack + strict playbook filter
+  4. Actual option entry recommendations (weekly default; selective 0DTE)
+  5. Tracker DB for empirical outcomes
 
-Run with:
+Run:
     python app.py
-
-First-run setup is documented in SETUP.md.
 """
 
 import os
@@ -24,12 +22,17 @@ from flask import Flask, jsonify, request, send_from_directory
 
 from schwab_client import SchwabClient
 from finnhub_client import FinnhubClient
-from analysis import analyze_instrument, rank_setups
+from analysis import (
+    analyze_instrument,
+    rank_setups,
+    current_desk_phase,
+    now_et,
+    now_pt,
+    build_morning_plan,
+    build_prompt_cowboy_board,
+)
 from tracker import OutcomeTracker
 
-# ---------------------------------------------------------------
-# Configuration
-# ---------------------------------------------------------------
 BASE_DIR = Path(__file__).parent.parent
 FRONTEND_DIR = BASE_DIR / "frontend"
 DATA_DIR = BASE_DIR / "data"
@@ -37,6 +40,7 @@ DATA_DIR.mkdir(exist_ok=True)
 
 CONFIG_PATH = BASE_DIR / "config.json"
 DB_PATH = DATA_DIR / "tracker.db"
+
 
 def load_config():
     if not CONFIG_PATH.exists():
@@ -47,24 +51,19 @@ def load_config():
     with open(CONFIG_PATH) as f:
         return json.load(f)
 
+
 config = load_config()
 
-# ---------------------------------------------------------------
-# Initialize clients and tracker
-# ---------------------------------------------------------------
 schwab = SchwabClient(
     app_key=config["schwab"]["app_key"],
     app_secret=config["schwab"]["app_secret"],
     callback_url=config["schwab"]["callback_url"],
-    token_path=DATA_DIR / "schwab_tokens.json"
+    token_path=DATA_DIR / "schwab_tokens.json",
 )
 
 finnhub = FinnhubClient(api_key=config["finnhub"]["api_key"])
 tracker = OutcomeTracker(db_path=DB_PATH)
 
-# ---------------------------------------------------------------
-# Flask app
-# ---------------------------------------------------------------
 app = Flask(__name__, static_folder=str(FRONTEND_DIR), static_url_path="")
 
 
@@ -76,90 +75,187 @@ def index():
 @app.route("/api/scan", methods=["GET"])
 def scan():
     """
-    Main endpoint. Runs the full pre-market analysis pipeline and returns
-    ranked trade setups for SPY and QQQ.
+    Full morning pipeline. Works in premarket AND RTH session windows.
+    Prints actual option entries when playbook + liquidity gates pass.
     """
     try:
-        # 1. Pull macro calendar for today
-        today = datetime.now(timezone.utc).date()
+        today = now_et().date()
+        phase = current_desk_phase()
 
         if today.weekday() >= 5:
             return jsonify({
                 "timestamp": datetime.now(timezone.utc).isoformat(),
                 "market_closed": "Markets are closed on weekends.",
-                "macro_summary": {"high_impact_events": [], "all_events": [], "earnings_today": []},
+                "session_phase": "closed",
+                "clock": {
+                    "et": now_et().strftime("%Y-%m-%d %H:%M %Z"),
+                    "pt": now_pt().strftime("%Y-%m-%d %H:%M %Z"),
+                },
+                "macro_summary": {
+                    "high_impact_events": [],
+                    "all_events": [],
+                    "earnings_today": [],
+                },
                 "instruments": [],
-                "tracker_stats": tracker.get_rolling_stats(days=30)
+                "recommendations": [],
+                "tracker_stats": tracker.get_rolling_stats(days=30),
             })
 
-        macro_events = finnhub.economic_calendar(today, today)
-        earnings = finnhub.earnings_calendar(
-            today, today,
-            tickers=["AAPL", "MSFT", "NVDA", "AMZN", "META", "GOOGL", "TSLA"]
-        )
+        # Finnhub free tier: economic calendar often 403 — never kill the scan
+        try:
+            macro_events = finnhub.economic_calendar(today, today) or []
+        except Exception as e:
+            app.logger.warning("macro calendar skipped: %s", e)
+            macro_events = []
+        try:
+            earnings = finnhub.earnings_calendar(
+                today,
+                today,
+                tickers=["AAPL", "MSFT", "NVDA", "AMZN", "META", "GOOGL", "TSLA"],
+            ) or []
+        except Exception as e:
+            app.logger.warning("earnings calendar skipped: %s", e)
+            earnings = []
 
-        # 2. Analyze each instrument
         results = []
         for symbol in ["SPY", "QQQ"]:
-            bars_daily = schwab.get_price_history(symbol, period_type="month", period=1,
-                                                   frequency_type="daily", frequency=1)
-            bars_hourly = schwab.get_price_history(symbol, period_type="day", period=5,
-                                                    frequency_type="minute", frequency=30)
+            # Multi-TF Schwab history (same candle family you see in TOS)
+            bars_daily = None  # set below in try
+            try:
+                bars_daily = schwab.get_price_history(
+                    symbol,
+                    period_type="month",
+                    period=6,
+                    frequency_type="daily",
+                    frequency=1,
+                )
+            except Exception as e:
+                msg = str(e)
+                if "401" in msg or "400" in msg or "token" in msg.lower() or "oauth" in msg.lower():
+                    return jsonify({
+                        "error": (
+                            "Schwab login expired (refresh token is ~7 days). "
+                            "In a terminal run:\n"
+                            "  cd C:\\Users\\Welcome\\Documents\\VibeProjects\\premarket-trader\\backend\n"
+                            "  python setup_auth.py\n"
+                            "Paste the browser callback URL when prompted, then restart "
+                            "python app.py and scan again. Detail: " + msg
+                        )
+                    }), 401
+                raise
+
+            bars_5m = schwab.get_price_history(
+                symbol, period_type="day", period=5,
+                frequency_type="minute", frequency=5,
+            )
+            bars_15m = schwab.get_price_history(
+                symbol, period_type="day", period=10,
+                frequency_type="minute", frequency=15,
+            )
+            # Schwab minute series max is usually 30m for "hour-like"; aggregate if needed
+            bars_30m = schwab.get_price_history(
+                symbol, period_type="day", period=10,
+                frequency_type="minute", frequency=30,
+            )
+            if not bars_15m or len(bars_15m) < 20:
+                bars_15m = bars_30m
+            bars_1h = []  # built via aggregate in analysis from 15m/30m
+
             quote = schwab.get_quote(symbol)
 
             analysis = analyze_instrument(
                 symbol=symbol,
                 daily_bars=bars_daily,
-                intraday_bars=bars_hourly,
+                intraday_bars=bars_15m,
                 quote=quote,
                 macro_events=macro_events,
-                earnings_events=earnings
+                earnings_events=earnings,
+                bars_5m=bars_5m,
+                bars_15m=bars_15m,
+                bars_1h=bars_1h or bars_30m,
             )
 
-            # Only fetch options chain if analysis found a viable setup
-            if analysis["setup"]:
-                target = analysis["setup"]["target_expiry"]
-                chain = schwab.get_option_chain(
-                    symbol=symbol,
-                    contract_type=analysis["setup"]["direction"],
-                    from_date=target,
-                    to_date=target
-                )
-                # Fallback: target expiry may be a market holiday — broaden to next 7 days
-                if not chain.get("contracts"):
-                    today_str = today.isoformat()
-                    end_str = (today + timedelta(days=7)).isoformat()
-                    chain = schwab.get_option_chain(
-                        symbol=symbol,
-                        contract_type=analysis["setup"]["direction"],
-                        from_date=today_str,
-                        to_date=end_str
-                    )
-                analysis["setup"]["strike_recommendation"] = pick_strike(
-                    chain, analysis["setup"]
-                )
+            if analysis.get("setup"):
+                strike_rec = select_option_contract(symbol, analysis["setup"])
+                analysis["setup"]["strike_recommendation"] = strike_rec
+                # If liquidity killed the contract in premarket, drop setup for print
+                if strike_rec and strike_rec.get("rejected"):
+                    analysis["setup"]["liquidity_rejected"] = True
+                    analysis["setup"]["liquidity_reason"] = strike_rec.get("reason")
+                    # Keep research view but do not recommend for size
+                    if phase == "premarket":
+                        # Hard reject in premkt if untradeable options
+                        analysis["reject_log"] = analysis.get("reject_log", []) + [{
+                            "reason": "option_liquidity",
+                            "detail": strike_rec.get("reason"),
+                        }]
+                        analysis["setup_research"] = analysis["setup"]
+                        analysis["setup"] = None
+                elif strike_rec and not strike_rec.get("rejected"):
+                    analysis["setup"]["option_entry"] = {
+                        "symbol": strike_rec.get("symbol"),
+                        "strike": strike_rec.get("strike"),
+                        "expiration": strike_rec.get("expiration"),
+                        "style": strike_rec.get("style"),
+                        "side": analysis["setup"]["direction"],
+                        "debit_mid": strike_rec.get("mid"),
+                        "bid": strike_rec.get("bid"),
+                        "ask": strike_rec.get("ask"),
+                        "spread": strike_rec.get("spread"),
+                        "spread_pct": strike_rec.get("spread_pct"),
+                        "delta": strike_rec.get("delta"),
+                        "volume": strike_rec.get("volume"),
+                        "open_interest": strike_rec.get("open_interest"),
+                        "session": analysis["setup"].get("session_label"),
+                    }
 
             results.append(analysis)
 
-        # 3. Rank setups and pick top 1-2
-        ranked = rank_setups(results)
+        ranked = rank_setups(results, max_recs=2)
+        recommendations = [
+            r for r in ranked
+            if r.get("setup") and r.get("recommended")
+        ]
 
-        # 4. Resolve outcomes of any open past recommendations before recording new ones
         tracker.check_outcomes(schwab)
+        for r in recommendations:
+            tracker.record_recommendation(r)
 
-        # 5. Silently log recommendations to the tracker
-        for r in ranked:
-            if r.get("setup"):
-                tracker.record_recommendation(r)
-
-        # 6. Get tracker stats for display
         stats = tracker.get_rolling_stats(days=30)
+        macro_summary = summarize_macro(macro_events, earnings)
+        morning_plan = build_morning_plan(
+            ranked, recommendations, phase, macro_summary=macro_summary
+        )
+        prompt_cowboy = build_prompt_cowboy_board(morning_plan, phase=phase)
 
         return jsonify({
             "timestamp": datetime.now(timezone.utc).isoformat(),
-            "macro_summary": summarize_macro(macro_events, earnings),
+            "session_phase": phase,
+            "clock": {
+                "et": now_et().strftime("%Y-%m-%d %H:%M %Z"),
+                "pt": now_pt().strftime("%Y-%m-%d %H:%M %Z"),
+            },
+            "entry_window_note": (
+                "Premarket option entries enabled with liquidity gates. "
+                "RTH open–11:30 ET (~6:30–8:30 AM PT) is the primary execution window. "
+                "Weekly default; 0DTE only A-tier. "
+                "Plan density always fills even with ZERO live entries."
+            ),
+            "macro_summary": macro_summary,
+            "morning_plan": morning_plan,
+            "prompt_cowboy": prompt_cowboy,
             "instruments": ranked,
-            "tracker_stats": stats
+            "recommendations": [
+                {
+                    "symbol": r["symbol"],
+                    "setup": r["setup"],
+                    "premarket_pack": r.get("premarket_pack"),
+                    "trend": r.get("trend"),
+                    "current_price": r.get("current_price"),
+                }
+                for r in recommendations
+            ],
+            "tracker_stats": stats,
         })
 
     except Exception as e:
@@ -167,43 +263,127 @@ def scan():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/brief", methods=["GET"])
+def brief():
+    """
+    Discord-ready morning brief (markdown text).
+    Uses same pipeline as /api/scan via morning_brief module.
+    """
+    try:
+        from morning_brief import run_pipeline, format_discord_brief
+        payload = run_pipeline()
+        text = format_discord_brief(payload)
+        return jsonify({
+            "text": text,
+            "session_phase": payload.get("phase"),
+            "clock": payload.get("clock"),
+            "headline": (payload.get("morning_plan") or {}).get("headline"),
+        })
+    except Exception as e:
+        app.logger.exception("brief failed")
+        return jsonify({"error": str(e), "text": f"**Premarket desk error:** {e}"}), 500
+
+
+@app.route("/api/zone-alerts", methods=["GET"])
+def zone_alerts_status():
+    """Status of zone radar (does not spam Discord). Optional force dry-run message."""
+    try:
+        from zone_alerts import tick, load_state, current_desk_phase, now_pt
+        # status_only uses analysis imports via tick
+        # Call module tick with capture — redo light
+        import io
+        from contextlib import redirect_stdout
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            code = tick(force=False, status_only=True)
+        raw = buf.getvalue().strip()
+        try:
+            payload = json.loads(raw) if raw else {}
+        except Exception:
+            payload = {"raw": raw}
+        st = load_state()
+        return jsonify({
+            "ok": code == 0,
+            "phase": payload.get("phase") or current_desk_phase(),
+            "status": payload,
+            "state_path": str(DATA_DIR / "zone_alert_state.json"),
+            "event_keys": list((st.get("events") or {}).keys())[:20],
+            "clock_pt": now_pt().strftime("%Y-%m-%d %H:%M %Z"),
+            "note": "Alerts only fire in premarket / rth_session (open–11:30 ET) via cron.",
+        })
+    except Exception as e:
+        app.logger.exception("zone-alerts status failed")
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/api/auth/start", methods=["GET"])
 def auth_start():
-    """Returns the URL the user needs to visit to authorize Schwab."""
     return jsonify({"url": schwab.get_auth_url()})
 
 
 @app.route("/api/auth/callback", methods=["POST"])
 def auth_callback():
-    """Exchanges the callback URL (with auth code) for tokens."""
     data = request.get_json()
     schwab.exchange_code(data["callback_url"])
     return jsonify({"status": "ok"})
 
-
 @app.route("/api/history", methods=["GET"])
 def history():
-    """Return recent recommendations for the history view."""
-    limit = min(int(request.args.get("limit", 30)), 100)
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    rows = conn.execute("""
-        SELECT id, recorded_at, symbol, direction, current_price,
-               entry_trigger_price, stop, target, rr_ratio,
-               conviction_score, conviction_label, outcome, outcome_at
-        FROM recommendations
-        ORDER BY recorded_at DESC
-        LIMIT ?
-    """, (limit,)).fetchall()
-    conn.close()
-    return jsonify([dict(r) for r in rows])
+    """Return recent recommendations for history + journal view."""
+    limit = min(int(request.args.get("limit", 50)), 100)
+    days = min(int(request.args.get("days", 90)), 365)
+    rows = tracker.list_journal(limit=limit, days=days)
+    return jsonify(rows)
+
+
+@app.route("/api/journal", methods=["GET", "POST"])
+def journal():
+    """
+    GET  — journal rows + analytics
+    POST — update decision/note/rating for one recommendation id
+           body: {id, decision?, note?, rating?}
+    """
+    if request.method == "GET":
+        limit = min(int(request.args.get("limit", 50)), 100)
+        days = min(int(request.args.get("days", 60)), 365)
+        return jsonify({
+            "entries": tracker.list_journal(limit=limit, days=days),
+            "analytics": tracker.journal_analytics(days=days),
+            "decisions": [
+                "took", "passed", "fomo", "late", "managed", "skipped_macro", "other"
+            ],
+            "tip": (
+                "Tag each rec: took/passed/fomo/late. Win% printed only from closed "
+                "price outcomes — not conviction scores."
+            ),
+        })
+
+    data = request.get_json(force=True, silent=True) or {}
+    rec_id = data.get("id")
+    if not rec_id:
+        return jsonify({"error": "id required"}), 400
+    result = tracker.update_journal(
+        rec_id=int(rec_id),
+        decision=data.get("decision"),
+        note=data.get("note"),
+        rating=data.get("rating"),
+    )
+    if result.get("error"):
+        return jsonify(result), 400
+    return jsonify(result)
+
+
+@app.route("/api/journal/stats", methods=["GET"])
+def journal_stats():
+    days = min(int(request.args.get("days", 60)), 365)
+    return jsonify(tracker.journal_analytics(days=days))
 
 
 @app.route("/api/health", methods=["GET"])
 def health():
     finnhub_ok = False
     try:
-        today = datetime.now(timezone.utc).date()
+        today = now_et().date()
         finnhub.economic_calendar(today, today)
         finnhub_ok = True
     except Exception:
@@ -211,50 +391,150 @@ def health():
     return jsonify({
         "schwab_authed": schwab.is_authenticated(),
         "finnhub_key_valid": finnhub_ok,
-        "tracker_db": str(DB_PATH)
+        "tracker_db": str(DB_PATH),
+        "session_phase": current_desk_phase(),
+        "clock_pt": now_pt().strftime("%Y-%m-%d %H:%M %Z"),
     })
 
 
 # ---------------------------------------------------------------
-# Helpers
+# Options selection with liquidity gates (premarket-aware)
 # ---------------------------------------------------------------
-def pick_strike(chain, setup):
-    """Pick a strike based on setup direction and expected move."""
-    if not chain or "contracts" not in chain:
-        return None
-    current = setup["current_price"]
+
+def select_option_contract(symbol, setup):
+    """
+    Pick weekly (default) or 0DTE (A-tier only) contract near ~0.40 |delta|.
+    Liquidity gates:
+      - bid & ask present and ask > 0
+      - spread/mid <= 15% (tighter 10% if premkt)
+      - prefer non-zero volume or OI when available
+    """
     direction = setup["direction"]
-    # Target ~0.40 delta for directional swing trades; user can adjust
-    target_delta = 0.40 if direction == "CALL" else -0.40
-    best = None
-    best_dist = float("inf")
+    phase = setup.get("session_phase") or current_desk_phase()
+    allow_0dte = setup.get("allow_0dte") and setup.get("zone_fresh")
+
+    # Try 0DTE first only if A-tier and session warrants (RTH preferred, premkt strict)
+    ordered_styles = []
+    if allow_0dte:
+        ordered_styles.append("0dte")
+    ordered_styles.append("weekly")
+
+    last_reject = None
+    for style in ordered_styles:
+        if style == "0dte":
+            exp = setup.get("target_expiry_0dte") or now_et().date().isoformat()
+            from_d, to_d = exp, exp
+        else:
+            exp = setup.get("target_expiry")
+            # Broader weekly window in case of holiday expiry
+            from_d = exp
+            to_d = (
+                datetime.fromisoformat(exp).date() + timedelta(days=4)
+            ).isoformat() if exp else None
+
+        chain = schwab.get_option_chain(
+            symbol=symbol,
+            contract_type=direction,
+            from_date=from_d,
+            to_date=to_d,
+        )
+        if not chain.get("contracts"):
+            # broaden
+            today_str = now_et().date().isoformat()
+            end_str = (now_et().date() + timedelta(days=10)).isoformat()
+            chain = schwab.get_option_chain(
+                symbol=symbol,
+                contract_type=direction,
+                from_date=today_str,
+                to_date=end_str,
+            )
+
+        picked = pick_strike(chain, setup, style=style, phase=phase)
+        if picked and not picked.get("rejected"):
+            picked["style"] = style
+            return picked
+        if picked:
+            last_reject = picked
+
+    return last_reject or {
+        "rejected": True,
+        "reason": "no_contracts",
+    }
+
+
+def pick_strike(chain, setup, style="weekly", phase="rth_session"):
+    if not chain or "contracts" not in chain or not chain["contracts"]:
+        return {"rejected": True, "reason": "empty_chain"}
+
+    target_delta = 0.40 if setup["direction"] == "CALL" else -0.40
+    max_spread_pct = 0.10 if phase == "premarket" else 0.15
+    min_mid = 0.15  # avoid worthless dust
+
+    ranked = []
     for c in chain["contracts"]:
         if c.get("delta") is None:
             continue
+        bid = c.get("bid")
+        ask = c.get("ask")
+        if bid is None or ask is None or ask <= 0:
+            continue
+        if ask < bid:
+            continue
+        mid = (bid + ask) / 2.0
+        if mid < min_mid:
+            continue
+        spread = ask - bid
+        spread_pct = spread / mid if mid else 999
+        if spread_pct > max_spread_pct:
+            continue
+        # Soft liquidity score
+        vol = c.get("volume") or 0
+        oi = c.get("open_interest") or 0
+        liq = vol + oi * 0.25
         dist = abs(c["delta"] - target_delta)
-        if dist < best_dist:
-            best_dist = dist
-            best = c
+        ranked.append((dist, -liq, spread_pct, {**c, "mid": round(mid, 2), "spread": round(spread, 2), "spread_pct": round(spread_pct, 3)}))
+
+    if not ranked:
+        return {
+            "rejected": True,
+            "reason": f"no_contract_passed_liquidity (max_spread_pct={max_spread_pct})",
+            "style": style,
+        }
+
+    ranked.sort(key=lambda x: (x[0], x[1], x[2]))
+    best = ranked[0][3]
+    best["rejected"] = False
+    best["style"] = style
     return best
 
 
 def summarize_macro(events, earnings):
     high_impact = [e for e in events if e.get("impact") == "high"]
+    notes = ["Hostile macro is a FLAG only — setups are not auto-killed."]
+    if not events and not earnings:
+        notes.append(
+            "No macro/earnings feed this run (Finnhub free tier often blocks "
+            "/calendar/economic). SPY/QQQ analysis still ran."
+        )
+    elif not events:
+        notes.append(
+            "Economic calendar empty or blocked on free Finnhub; earnings feed used if available."
+        )
     return {
         "high_impact_events": high_impact,
-        "all_events": events,
-        "earnings_today": earnings
+        "all_events": events or [],
+        "earnings_today": earnings or [],
+        "note": " ".join(notes),
     }
 
 
-# ---------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------
 if __name__ == "__main__":
     print("=" * 60)
-    print("Pre-Market Research Desk")
+    print("Pre-Market Research Desk  ·  Carmine session build")
     print("=" * 60)
     print(f"Schwab authenticated: {schwab.is_authenticated()}")
+    print(f"Session phase:        {current_desk_phase()}")
+    print(f"Clock PT:             {now_pt().strftime('%Y-%m-%d %H:%M %Z')}")
     print(f"Frontend directory:   {FRONTEND_DIR}")
     print(f"Tracker database:     {DB_PATH}")
     print("=" * 60)
