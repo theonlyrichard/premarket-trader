@@ -74,3 +74,15 @@ class FinnhubClient:
             "/news", {"category": category, "minId": min_id}, optional=True
         )
         return data or []
+
+    def company_news(self, symbol, from_date, to_date):
+        """
+        Company headlines. NOTE: sparse/empty for ETFs (SPY/QQQ) — callers
+        must treat [] as normal, not an error.
+        """
+        data = self._get(
+            "/company-news",
+            {"symbol": symbol, "from": str(from_date), "to": str(to_date)},
+            optional=True,
+        )
+        return data or []

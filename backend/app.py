@@ -64,6 +64,18 @@ schwab = SchwabClient(
 finnhub = FinnhubClient(api_key=config["finnhub"]["api_key"])
 tracker = OutcomeTracker(db_path=DB_PATH)
 
+import news_feed
+news_feed.init(finnhub)
+
+
+def safe_news_summary(max_headlines=3):
+    """News is flag-only — a news failure must never break a scan."""
+    try:
+        return news_feed.build_news_summary(max_headlines=max_headlines)
+    except Exception as e:
+        app.logger.warning("news summary skipped: %s", e)
+        return None
+
 app = Flask(__name__, static_folder=str(FRONTEND_DIR), static_url_path="")
 
 
@@ -244,6 +256,7 @@ def scan():
             "macro_summary": macro_summary,
             "morning_plan": morning_plan,
             "prompt_cowboy": prompt_cowboy,
+            "news_summary": safe_news_summary(max_headlines=3),
             "instruments": ranked,
             "recommendations": [
                 {
@@ -261,6 +274,18 @@ def scan():
     except Exception as e:
         app.logger.exception("scan failed")
         return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/news", methods=["GET"])
+def news():
+    """
+    Market news + naive sentiment. FLAG-ONLY: never gates a trade.
+    Cached 5 min (data/news_cache.json) so refreshes don't spam Finnhub.
+    """
+    summary = safe_news_summary(max_headlines=6)
+    if summary is None:
+        return jsonify({"error": "news unavailable", "news_summary": None}), 502
+    return jsonify({"news_summary": summary})
 
 
 @app.route("/api/brief", methods=["GET"])

@@ -227,6 +227,36 @@
     .zones th, .zones td { padding: 9px 8px; }
     .tape-items { margin-left: 0; width: 100%; }
   }
+  /* NEWS (flag-only) */
+  .news-strip {
+    display: flex; align-items: center; gap: 12px;
+    background: var(--bg-panel); border: 1px solid var(--border); border-radius: 6px;
+    padding: 8px 14px; margin-bottom: 18px; cursor: pointer;
+    font-size: 11px; font-weight: 700; letter-spacing: 0.04em;
+  }
+  .news-strip:hover { border-color: var(--border-bright); }
+  .news-label { font-size: 10px; font-weight: 800; letter-spacing: 0.1em; color: var(--text-faint); }
+  .news-count.BULLISH { color: var(--green); }
+  .news-count.BEARISH { color: var(--red); }
+  .news-count.NEUTRAL { color: var(--text-dim); }
+  .news-sep { color: var(--text-faint); font-weight: 400; padding: 0 4px; }
+  .news-flag { margin-left: auto; font-size: 9px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-faint); border: 1px solid var(--border); border-radius: 3px; padding: 1px 6px; }
+  .news-caret { color: var(--text-faint); font-size: 10px; }
+  .news-panel {
+    background: var(--bg-panel); border: 1px solid var(--border); border-radius: 6px;
+    margin: -12px 0 18px; overflow: hidden;
+  }
+  .news-card { display: flex; align-items: baseline; gap: 10px; padding: 10px 14px; border-bottom: 1px solid var(--border); }
+  .news-card:last-child { border-bottom: none; }
+  .news-badge {
+    flex: 0 0 auto; font-size: 9px; font-weight: 800; letter-spacing: 0.08em;
+    padding: 2px 7px; border-radius: 3px; border: 1px solid var(--border-bright); color: var(--text-dim);
+  }
+  .news-badge.BULLISH { border-color: var(--green); color: var(--green); background: var(--green-glow); }
+  .news-badge.BEARISH { border-color: var(--red); color: var(--red); background: var(--red-glow); }
+  .news-headline { color: var(--text); text-decoration: none; font-size: 12px; }
+  .news-headline:hover { color: var(--blue); }
+  .news-meta { margin-left: auto; flex: 0 0 auto; color: var(--text-faint); font-size: 10px; }
 </style>
 </head>
 <body>
@@ -256,6 +286,14 @@
     <div class="verdict-grade" id="verdictGrade">—</div>
     <div id="verdictBody"></div>
   </div>
+
+  <div class="news-strip" id="newsStrip" style="display:none" onclick="toggleNewsPanel()">
+    <span class="news-label">NEWS</span>
+    <span id="newsTally"></span>
+    <span class="news-flag">flag only</span>
+    <span class="news-caret" id="newsCaret">▾</span>
+  </div>
+  <div class="news-panel" id="newsPanel" style="display:none"></div>
 
   <div class="tape" id="tape" style="display:none">
     <div class="tape-symbol" id="tapeSymbols"></div>
@@ -292,12 +330,31 @@ async function runScan() {
   $('scanBtn').disabled = true;
   try {
     const r = await fetch('/api/scan');
-    const d = await r.json();
+    if (!r.ok) {
+      const text = await r.text().catch(() => '');
+      console.error('Scan HTTP error:', r.status, text);
+      showError(`Scan failed — backend returned HTTP ${r.status}. ${text.slice(0, 120)}`);
+      return;
+    }
+    let d;
+    try {
+      d = await r.json();
+    } catch (parseErr) {
+      console.error('Scan response was not valid JSON:', parseErr);
+      showError('Scan failed — backend response was not valid JSON. Check the Flask console.');
+      return;
+    }
     if (d.error) { showError(d.error); return; }
     lastData = d;
-    render(d);
+    try {
+      render(d);
+    } catch (renderErr) {
+      console.error('Render error (data received OK):', renderErr);
+      showError(`Display error (backend OK): ${renderErr.message}`);
+    }
   } catch (e) {
-    showError('Scan failed — make sure python app.py is running.');
+    console.error('Scan failed:', e);
+    showError(`Scan failed — ${e.message}. Make sure python app.py is running.`);
   } finally {
     $('loading').style.display = 'none';
     $('scanBtn').disabled = false;
@@ -318,7 +375,7 @@ function hideError() {
   errEl.innerHTML = '';
 }
 
-function escapeHtml(s) { return s.replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+function escapeHtml(s) { return String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
 
 function render(d) {
   const phase = d.session_phase || 'closed';
@@ -363,7 +420,7 @@ function render(d) {
       ['Stop', s.stop || '—'],
       ['Target', s.target || '—'],
       ['R:R', s.rr_ratio ? s.rr_ratio + ':1' : '—'],
-      ['Option', s.option_entry || s.strike_recommendation || '—']
+      ['Option', fmtOption(s.option_entry || s.strike_recommendation)]
     ];
     const row = document.createElement('div'); row.className = 'trade-row';
     chips.forEach(([lab, val, color]) => {
@@ -391,6 +448,9 @@ function render(d) {
       body.appendChild(div);
     }
   }
+
+  // News strip (flag-only — must never affect the verdict above)
+  try { renderNews(d.news_summary); } catch (e) { console.error('news strip error:', e); }
 
   // Tape
   renderTape(instruments, cfg);
@@ -432,7 +492,8 @@ function renderTape(instruments, cfg) {
   const inst = instruments.find(i => i.symbol === selectedSymbol) || instruments[0];
   const p = inst.premarket_pack || {};
   const arrs = [
-    ['ONH', p.on_high], ['ONL', p.on_low], ['Prior C', p.prior_close],
+    ['ONH', p.on_high ?? p.overnight_high], ['ONL', p.on_low ?? p.overnight_low],
+    ['Prior C', p.prior_close ?? p.prior_day?.close],
     ['Globex', p.globex_high && p.globex_low ? `${fmt(p.globex_low)}–${fmt(p.globex_high)}` : null],
     ['Gap', p.gap_pct ? (p.gap_pct > 0 ? '+' : '') + fmt(p.gap_pct) + '%' : null]
   ];
@@ -450,19 +511,22 @@ function renderZones(instruments) {
   instruments.forEach(inst => {
     (inst.zone_map || []).slice(0, 3).forEach(z => zones.push({...z, symbol: inst.symbol}));
   });
-  zones.sort((a, b) => (a.distance || 999) - (b.distance || 999));
+  zones.sort((a, b) => (a.distance ?? a.dist_from_price ?? 999) - (b.distance ?? b.dist_from_price ?? 999));
   const display = zones.slice(0, 5);
   if (!display.length) { panel.style.display = 'none'; return; }
   panel.style.display = 'block';
-  body.innerHTML = display.map(z => `
+  body.innerHTML = display.map(z => {
+    const status = z.status || (z.fresh ? 'fresh' : (z.mitigated ? 'mitigated' : 'tested'));
+    return `
     <tr>
       <td>${z.symbol}</td>
       <td>${z.timeframe}</td>
       <td class="zone-type ${z.type}">${z.type} ${z.pattern}</td>
       <td>${fmt(z.bottom)}–${fmt(z.top)}</td>
-      <td class="zone-status ${z.status === 'fresh' ? 'fresh' : ''}">${z.status || ''}</td>
+      <td class="zone-status ${status === 'fresh' ? 'fresh' : ''}">${status}</td>
     </tr>
-  `).join('');
+  `;
+  }).join('');
 }
 
 function renderAccordions(d) {
@@ -525,16 +589,98 @@ function renderOFDetail(instruments) {
 }
 
 function renderMacro(macro) {
-  if (!macro || !macro.events?.length) return 'No macro events flagged.';
-  return macro.events.map(e => `<div class="macro-note">${escapeHtml(e.date || '')}: ${escapeHtml(e.name || '')} (${escapeHtml(e.country || '')})</div>`).join('') + `<div style="margin-top:6px;color:var(--text-faint)">${escapeHtml(macro.note || '')}</div>`;
+  if (!macro) return 'No macro events flagged.';
+  const events = macro.events || macro.high_impact_events || macro.all_events || [];
+  const note = macro.note ? `<div style="margin-top:6px;color:var(--text-faint)">${escapeHtml(macro.note)}</div>` : '';
+  if (!events.length) return 'No macro events flagged.' + note;
+  return events.map(e => `<div class="macro-note">${escapeHtml(e.date || '')}: ${escapeHtml(e.name || e.event || '')} (${escapeHtml(e.country || '')})</div>`).join('') + note;
 }
 
 function renderCowboy(board) {
   if (!board) return 'No prompts.';
-  return Object.entries(board).map(([k, v]) => `<div style="margin-bottom:10px"><b style="color:var(--text)">${escapeHtml(k)}</b><pre style="margin-top:4px;padding:8px;background:var(--bg);border:1px solid var(--border);border-radius:4px;white-space:pre-wrap;font-size:11px;color:var(--text-dim)">${escapeHtml(v)}</pre></div>`).join('');
+  const asText = v => {
+    if (typeof v === 'string') return v;
+    if (Array.isArray(v)) return v.map(item =>
+      (item && typeof item === 'object') ? `── ${item.title || item.id || ''} ──\n${item.prompt || JSON.stringify(item, null, 2)}` : String(item)
+    ).join('\n\n');
+    if (v && typeof v === 'object') return JSON.stringify(v, null, 2);
+    return String(v ?? '');
+  };
+  return Object.entries(board).map(([k, v]) => `<div style="margin-bottom:10px"><b style="color:var(--text)">${escapeHtml(k)}</b><pre style="margin-top:4px;padding:8px;background:var(--bg);border:1px solid var(--border);border-radius:4px;white-space:pre-wrap;font-size:11px;color:var(--text-dim)">${escapeHtml(asText(v))}</pre></div>`).join('');
 }
 
 function fmt(n) { return n == null ? '—' : Number(n).toFixed(2); }
+
+// ── News (flag-only) ─────────────────────────────────────────────────
+let _newsSummary = null;   // from /api/scan (max 3 headlines)
+let _newsFull = null;      // from /api/news on expand (max 6)
+let _newsOpen = false;
+
+function renderNews(summary) {
+  const strip = $('newsStrip');
+  const panel = $('newsPanel');
+  if (!summary || !summary.tally) {
+    strip.style.display = 'none';
+    panel.style.display = 'none';
+    _newsOpen = false;
+    return;
+  }
+  _newsSummary = summary;
+  _newsFull = null; // new scan → refetch full list on next expand
+  const t = summary.tally;
+  $('newsTally').innerHTML =
+    `<span class="news-count BULLISH">BULLISH ${t.BULLISH || 0}</span><span class="news-sep">·</span>` +
+    `<span class="news-count NEUTRAL">NEUTRAL ${t.NEUTRAL || 0}</span><span class="news-sep">·</span>` +
+    `<span class="news-count BEARISH">BEARISH ${t.BEARISH || 0}</span>`;
+  strip.style.display = 'flex';
+  if (_newsOpen) renderNewsCards(summary.headlines || []);
+}
+
+async function toggleNewsPanel() {
+  const panel = $('newsPanel');
+  _newsOpen = !_newsOpen;
+  $('newsCaret').textContent = _newsOpen ? '▴' : '▾';
+  if (!_newsOpen) { panel.style.display = 'none'; return; }
+  renderNewsCards((_newsFull || _newsSummary)?.headlines || []);
+  if (!_newsFull) {
+    try {
+      const r = await fetch('/api/news');
+      if (r.ok) {
+        const d = await r.json();
+        if (d.news_summary?.headlines?.length) {
+          _newsFull = d.news_summary;
+          if (_newsOpen) renderNewsCards(_newsFull.headlines);
+        }
+      }
+    } catch (e) { console.error('full news fetch failed:', e); }
+  }
+}
+
+function renderNewsCards(headlines) {
+  const panel = $('newsPanel');
+  panel.style.display = 'block';
+  if (!headlines.length) { panel.innerHTML = '<div class="news-card"><span style="color:var(--text-faint)">No headlines.</span></div>'; return; }
+  panel.innerHTML = headlines.map(h => {
+    const time = h.datetime ? new Date(h.datetime * 1000).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : '';
+    const link = h.url
+      ? `<a class="news-headline" href="${escapeHtml(h.url)}" target="_blank" rel="noopener">${escapeHtml(h.headline)}</a>`
+      : `<span class="news-headline">${escapeHtml(h.headline)}</span>`;
+    return `<div class="news-card">
+      <span class="news-badge ${h.sentiment || 'NEUTRAL'}">${h.sentiment || 'NEUTRAL'}</span>
+      ${link}
+      <span class="news-meta">${escapeHtml(h.source || '')}${time ? ' · ' + time : ''}</span>
+    </div>`;
+  }).join('');
+}
+
+function fmtOption(o) {
+  if (!o) return '—';
+  if (typeof o === 'string') return o;
+  const strike = o.strike != null ? String(Number(o.strike)) : '?';
+  const side = (o.side || '').charAt(0).toUpperCase();
+  const price = o.debit_mid ?? o.mid ?? o.ask;
+  return `${strike}${side}${o.style ? ' ' + o.style : ''}${price != null ? ' @ ~' + fmt(price) : ''}`;
+}
 
 async function openDrawer(which) {
   let title = 'Journal';
