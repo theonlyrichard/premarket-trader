@@ -1,57 +1,88 @@
 """
 Finnhub API client.
 
-Free tier: 60 calls/minute, unlimited per day. For our daily use case
-(one scan per morning) this is vastly more than enough.
+Free tier: 60 calls/minute. Economic calendar is often paywalled (403) on
+free keys — this client degrades gracefully so the desk still runs.
 
 Docs: https://finnhub.io/docs/api
 """
 
+import logging
 import requests
 from datetime import date
+
+log = logging.getLogger(__name__)
 
 
 class FinnhubClient:
     BASE_URL = "https://finnhub.io/api/v1"
 
     def __init__(self, api_key):
-        self.api_key = api_key
+        self.api_key = (api_key or "").strip()
 
-    def _get(self, endpoint, params=None):
+    def _get(self, endpoint, params=None, optional=False):
         params = params or {}
         params["token"] = self.api_key
-        resp = requests.get(f"{self.BASE_URL}{endpoint}", params=params, timeout=10)
-        resp.raise_for_status()
-        return resp.json()
+        try:
+            resp = requests.get(
+                f"{self.BASE_URL}{endpoint}", params=params, timeout=10
+            )
+            if resp.status_code in (401, 403):
+                msg = f"Finnhub {endpoint} → {resp.status_code} (plan/key blocked)"
+                log.warning(msg)
+                if optional:
+                    return None
+                # Still optional for desk resilience
+                return None
+            resp.raise_for_status()
+            return resp.json()
+        except requests.RequestException as e:
+            log.warning("Finnhub %s failed: %s", endpoint, e)
+            if optional:
+                return None
+            return None
 
     def economic_calendar(self, from_date, to_date):
         """
-        Returns US economic events (Fed, CPI, NFP, GDP, PMI, etc).
-        Each event has: country, event, time, impact (low/medium/high),
-        actual, estimate, prev.
+        US economic events. Free tier often returns 403 — returns [] then.
         """
-        data = self._get("/calendar/economic", {
-            "from": str(from_date),
-            "to": str(to_date)
-        })
+        data = self._get(
+            "/calendar/economic",
+            {"from": str(from_date), "to": str(to_date)},
+            optional=True,
+        )
+        if not data:
+            return []
         events = data.get("economicCalendar", [])
-        # Filter to US-only by default since we're trading US indices
         return [e for e in events if e.get("country") == "US"]
 
     def earnings_calendar(self, from_date, to_date, tickers=None):
-        """
-        Returns earnings announcements.
-        If tickers provided, filter to just those symbols.
-        """
-        data = self._get("/calendar/earnings", {
-            "from": str(from_date),
-            "to": str(to_date)
-        })
+        data = self._get(
+            "/calendar/earnings",
+            {"from": str(from_date), "to": str(to_date)},
+            optional=True,
+        )
+        if not data:
+            return []
         earnings = data.get("earningsCalendar", [])
         if tickers:
             earnings = [e for e in earnings if e.get("symbol") in tickers]
         return earnings
 
     def market_news(self, category="general", min_id=0):
-        """Latest market news, useful for surfacing overnight headlines."""
-        return self._get("/news", {"category": category, "minId": min_id})
+        data = self._get(
+            "/news", {"category": category, "minId": min_id}, optional=True
+        )
+        return data or []
+
+    def company_news(self, symbol, from_date, to_date):
+        """
+        Company headlines. NOTE: sparse/empty for ETFs (SPY/QQQ) — callers
+        must treat [] as normal, not an error.
+        """
+        data = self._get(
+            "/company-news",
+            {"symbol": symbol, "from": str(from_date), "to": str(to_date)},
+            optional=True,
+        )
+        return data or []
